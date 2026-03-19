@@ -1,0 +1,25 @@
+# Core dependencies for Enhanced Deforum Music Generator
+gradio>=4.44.0
+# NOTE: torch is installed by scripts/edmg_installer.py based on --backend (cpu|cu118|cu121|cu124)
+# NOTE: Whisper is installed (full/dev) with --no-deps to avoid torch conflicts; FFmpeg must be available.
+numpy>=1.23.0
+scipy>=1.10.0
+requests>=2.25.0
+PyYAML>=6.0.0
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# AI/ML features
+transformers>=4.30.0
+spacy>=3.5.0
+textblob>=0.17.0
+nltk>=3.8.0
+
+# Web API
+fastapi>=0.95.0
+uvicorn[standard]>=0.22.0
+
+# Utilities
+python-multipart>=0.0.5
+python-dotenv>=0.21.0
+pydantic>=1.10.0
