@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EDMG Studio</title>
+    <link rel="stylesheet" href="../node_modules/jsoneditor/dist/jsoneditor.min.css">
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0b0b0c; color: #e8e8ea; }
+      header { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: #131316; border-bottom: 1px solid #1f1f24; }
+      header h1 { font-size: 14px; margin: 0; letter-spacing: 0.4px; }
+      header .status { font-size: 12px; opacity: 0.9; }
+      main { display: grid; grid-template-columns: 420px 1fr; height: calc(100vh - 48px); }
+      .sidebar { border-right: 1px solid #1f1f24; padding: 12px; overflow: auto; }
+      .panel { background: #111114; border: 1px solid #1f1f24; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+      .panel h2 { font-size: 12px; margin: 0 0 10px 0; opacity: 0.9; }
+      .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+      input, select, button { background: #15151a; color: #e8e8ea; border: 1px solid #2a2a33; border-radius: 8px; padding: 8px; font-size: 12px; }
+      button { cursor: pointer; }
+      button.primary { background: #2a2a33; }
+      .hint { font-size: 11px; opacity: 0.75; line-height: 1.4; }
+      .editorWrap { padding: 12px; overflow: auto; }
+      #editor { height: calc(100vh - 72px); border: 1px solid #1f1f24; border-radius: 10px; }
+      pre { white-space: pre-wrap; word-break: break-word; font-size: 11px; background: #0e0e11; border: 1px solid #1f1f24; border-radius: 10px; padding: 10px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>EDMG Studio (CPU-first)</h1>
+      <div class="status" id="status">API: starting…</div>
+    </header>
+    <main>
+      <div class="sidebar">
+        <div class="panel">
+          <h2>1) Audio</h2>
+          <div class="row">
+            <input type="file" id="audioFile" accept="audio/*" />
+          </div>
+          <div class="row">
+            <label class="hint"><input type="checkbox" id="enableLyrics" /> try lyrics (requires whisper)</label>
+          </div>
+          <div class="row">
+            <button class="primary" id="btnAnalyze">Analyze</button>
+            <button id="btnCalibrate">Calibrate sync</button>
+          </div>
+          <div class="hint">Analyze returns beats + energy. Calibrate estimates a tiny offset to make beats land closer to frame boundaries.</div>
+        </div>
+
+        <div class="panel">
+          <h2>2) Models</h2>
+          <div class="row">
+            <select id="modelSelect" style="flex:1"></select>
+            <button id="btnRefreshModels">Refresh</button>
+          </div>
+          <div class="row">
+            <input id="hfToken" type="password" placeholder="HF token (optional)" style="flex:1" />
+            <button class="primary" id="btnDownloadModel">Download</button>
+          </div>
+          <div class="hint">Downloads go to a central <code>models_store/</code> folder by default (override with <code>EDMG_MODELS_ROOT</code>).</div>
+        </div>
+
+        <div class="panel">
+          <h2>3) Generate Deforum JSON</h2>
+          <div class="row">
+            <input id="basePrompt" placeholder="Base prompt" style="flex:1" />
+          </div>
+          <div class="row">
+            <input id="stylePrompt" placeholder="Style prompt" style="flex:1" />
+          </div>
+          <div class="row">
+            <button class="primary" id="btnGenerate">Generate settings</button>
+            <button id="btnLoadTemplate">Reset to template</button>
+          </div>
+          <div class="hint">This is JSON-first. The editor contains the *full* Deforum schema so you can keep parity with the notebook workflow.</div>
+        </div>
+
+        <div class="panel">
+          <h2>4) JSON Tools</h2>
+          <div class="row">
+            <button class="primary" id="btnSaveJson">Export JSON</button>
+            <button id="btnLoadJson">Import JSON</button>
+          </div>
+          <div class="row">
+            <button id="btnCopyJson">Copy JSON</button>
+            <button id="btnClearLog">Clear logs</button>
+          </div>
+          <div class="hint">Import/Export uses native dialogs. Copy puts the current editor JSON on the clipboard.</div>
+        </div>
+
+        <div class="panel">
+          <h2>5) Utilities</h2>
+          <div class="row">
+            <button id="btnOpenOutputs">Open outputs</button>
+            <button id="btnOpenModels">Open models_store</button>
+          </div>
+          <div class="row">
+            <button id="btnOpenRepo">Open repo root</button>
+            <button id="btnRestartApi">Restart API</button>
+          </div>
+          <div class="hint">Use these helpers to jump to common folders or restart the backend if it gets stuck.</div>
+        </div>
+
+        <div class="panel">
+          <h2>Logs</h2>
+          <pre id="log"></pre>
+        </div>
+      </div>
+
+      <div class="editorWrap">
+        <div id="editor"></div>
+      </div>
+    </main>
+
+    <script src="../node_modules/jsoneditor/dist/jsoneditor.min.js"></script>
+    <script src="renderer.js"></script>
+  </body>
+</html>

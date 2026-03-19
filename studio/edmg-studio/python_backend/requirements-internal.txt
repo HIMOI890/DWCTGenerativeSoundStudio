@@ -1,0 +1,8 @@
+# Internal diffusion + local downloads (CPU/GPU)
+diffusers>=0.30.0
+transformers>=4.42.0
+accelerate>=0.33.0
+safetensors>=0.4.3
+torch>=2.2.0
+
+numpy>=1.23.0

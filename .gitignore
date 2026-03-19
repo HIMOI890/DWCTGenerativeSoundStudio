@@ -1,0 +1,82 @@
+﻿# ----------------------------
+# Python
+# ----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+*.log
+
+# ----------------------------
+# Python packaging / build
+# ----------------------------
+.Python
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+pip-wheel-metadata/
+
+# ----------------------------
+# Virtual environments
+# ----------------------------
+venv/
+.venv/
+**/venv/
+**/.venv/
+
+# ----------------------------
+# EDMG generated / runtime artifacts
+# ----------------------------
+support_bundles/
+install_profiles/
+models_store/
+outputs/
+cache/
+*_REPORT.md
+PATCH_*.txt
+TEST_REPORT.json
+
+# ----------------------------
+# External apps
+# Ignore everything under external/ EXCEPT the submodule mount points
+# ----------------------------
+external/*
+!external/
+!external/stable-diffusion-webui
+!external/stable-diffusion-webui/
+!external/ComfyUI
+!external/ComfyUI/
+
+
+# ----------------------------
+# Electron UI dependencies
+# ----------------------------
+desktop/electron/node_modules/
+node_modules/
+studio/edmg-studio/dist/
+studio/edmg-studio/release/
+studio/edmg-studio/tmp/
+studio/edmg-studio/data/
+studio/edmg-studio/_legacy_migrations/
+studio/edmg-studio/launcher_env.json
+studio/edmg-studio/electron/
+studio/edmg-studio/electron-resources/backend/*.exe
+studio/edmg-studio/electron-resources/bin/*.exe
+
+# ----------------------------
+# OS / editor
+# ----------------------------
+Thumbs.db
+Desktop.ini
+*.code-workspace
+.vscode/

@@ -1,0 +1,6 @@
+[submodule "external/stable-diffusion-webui"]
+	path = external/stable-diffusion-webui
+	url = https://github.com/AUTOMATIC1111/stable-diffusion-webui
+[submodule "external/ComfyUI"]
+	path = external/ComfyUI
+	url = https://github.com/comfyanonymous/ComfyUI

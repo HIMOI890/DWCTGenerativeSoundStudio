@@ -1,0 +1,3 @@
+audio:
+  max_duration: 1800
+  sample_rate: 22050

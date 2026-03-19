@@ -1,0 +1,20 @@
+{
+  "name": "edmg-electron-ui",
+  "private": true,
+  "version": "0.1.0",
+  "main": "electron/main.js",
+  "description": "Electron GUI for Enhanced Deforum Music Generator (JSON-first)",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "jsoneditor": "^10.2.0"
+  },
+  "devDependencies": {
+    "electron": "^29.4.6",
+    "electron-builder": "^24.13.3"
+  }
+}

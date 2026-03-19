@@ -1,0 +1,212 @@
+{
+  "version": 1,
+  "generated_utc": "2026-01-07T22:30:37.991430Z",
+  "workflows": [
+    {
+      "id": "wan22_ti2v_5b",
+      "title": "Wan2.2 TI2V 5B (official template JSON)",
+      "family": "wan",
+      "source_url": "https://raw.githubusercontent.com/comfyanonymous/ComfyUI_examples/master/wan22/wan2.2_5B_ti2v.json",
+      "file_name": "wan2.2_5B_ti2v_official.json",
+      "required_models": [
+        {
+          "want": "wan2.2_ti2v_5B_fp16.safetensors",
+          "type": "diffusion_models",
+          "alts": [
+            "wan2.2_ti2v_5B",
+            "wan2.2_ti2v"
+          ]
+        },
+        {
+          "want": "wan2.2_vae.safetensors",
+          "type": "vae",
+          "alts": [
+            "wan2.2_vae",
+            "wan_2.2_vae",
+            "wan_2.1_vae"
+          ]
+        },
+        {
+          "want": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "type": "text_encoders",
+          "alts": [
+            "umt5_xxl",
+            "umt5"
+          ]
+        }
+      ],
+      "notes": "This is aligned with ComfyUI Wan2.2 docs template. See docs.comfy.org Wan2.2 page."
+    },
+    {
+      "id": "wan22_t2v_a14b",
+      "title": "Wan2.2 14B T2V (official template JSON)",
+      "family": "wan",
+      "source_url": "https://raw.githubusercontent.com/comfyanonymous/ComfyUI_examples/master/wan22/wan2.2_14B_t2v.json",
+      "file_name": "wan2.2_14B_t2v_official.json",
+      "required_models": [
+        {
+          "want": "wan2.2_t2v_high_noise_14B_fp8_scaled.safetensors",
+          "type": "diffusion_models",
+          "alts": [
+            "wan2.2_t2v_high_noise_14B",
+            "t2v_high_noise"
+          ]
+        },
+        {
+          "want": "wan2.2_t2v_low_noise_14B_fp8_scaled.safetensors",
+          "type": "diffusion_models",
+          "alts": [
+            "wan2.2_t2v_low_noise_14B",
+            "t2v_low_noise"
+          ]
+        },
+        {
+          "want": "wan_2.1_vae.safetensors",
+          "type": "vae",
+          "alts": [
+            "wan_2.1_vae",
+            "wan2.2_vae",
+            "wan_vae"
+          ]
+        },
+        {
+          "want": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "type": "text_encoders",
+          "alts": [
+            "umt5_xxl",
+            "umt5"
+          ]
+        }
+      ],
+      "notes": "Matches ComfyUI official Wan2.2 docs guidance."
+    },
+    {
+      "id": "wan22_i2v_a14b",
+      "title": "Wan2.2 14B I2V (official template JSON)",
+      "family": "wan",
+      "source_url": "https://raw.githubusercontent.com/comfyanonymous/ComfyUI_examples/master/wan22/wan2.2_14B_i2v.json",
+      "file_name": "wan2.2_14B_i2v_official.json",
+      "required_models": [
+        {
+          "want": "wan2.2_i2v_high_noise_14B_fp16.safetensors",
+          "type": "diffusion_models",
+          "alts": [
+            "wan2.2_i2v_high_noise_14B",
+            "i2v_high_noise"
+          ]
+        },
+        {
+          "want": "wan2.2_i2v_low_noise_14B_fp16.safetensors",
+          "type": "diffusion_models",
+          "alts": [
+            "wan2.2_i2v_low_noise_14B",
+            "i2v_low_noise"
+          ]
+        },
+        {
+          "want": "wan_2.1_vae.safetensors",
+          "type": "vae",
+          "alts": [
+            "wan_2.1_vae",
+            "wan2.2_vae",
+            "wan_vae"
+          ]
+        },
+        {
+          "want": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          "type": "text_encoders",
+          "alts": [
+            "umt5_xxl",
+            "umt5"
+          ]
+        }
+      ],
+      "notes": "Matches ComfyUI official Wan2.2 docs guidance."
+    },
+    {
+      "id": "hunyuan_video_t2v",
+      "title": "Hunyuan Video T2V (community workflow JSON)",
+      "family": "hunyuan",
+      "source_url": "https://raw.githubusercontent.com/chengzeyi/Comfy-WaveSpeed/main/workflows/hunyuan_video.json",
+      "file_name": "hunyuan_video_wavespeed.json",
+      "required_models": [
+        {
+          "want": "clip_l.safetensors",
+          "type": "text_encoders",
+          "alts": [
+            "clip_l"
+          ]
+        },
+        {
+          "want": "llava_llama3_fp8_scaled.safetensors",
+          "type": "text_encoders",
+          "alts": [
+            "llava_llama3_fp8_scaled",
+            "llava_llama3"
+          ]
+        },
+        {
+          "want": "hunyuan_video_vae_bf16.safetensors",
+          "type": "vae",
+          "alts": [
+            "hunyuan_video_vae"
+          ]
+        },
+        {
+          "want": "hunyuan_video_t2v_720p_bf16.safetensors",
+          "type": "diffusion_models",
+          "alts": [
+            "hunyuan_video_t2v_720p",
+            "hunyuan_video_t2v"
+          ]
+        }
+      ],
+      "notes": "Official docs provide embedded workflow images; this JSON is a reproducible community workflow."
+    },
+    {
+      "id": "ltxv_t2v",
+      "title": "LTX Video T2V (ComfyUI-LTXVideo example workflow)",
+      "family": "ltx",
+      "source_url": "https://raw.githubusercontent.com/Lightricks/ComfyUI-LTXVideo/master/example_workflows/LTX-2_T2V_Distilled_wLora.json",
+      "file_name": "ltxv_t2v_distilled.json",
+      "required_models": [
+        {
+          "want": "t5xxl_fp16.safetensors",
+          "type": "text_encoders",
+          "alts": [
+            "t5xxl_fp16",
+            "t5xxl"
+          ]
+        },
+        {
+          "want": "ltx-2-19b-distilled-fp8.safetensors",
+          "type": "checkpoints",
+          "alts": [
+            "ltx",
+            "ltx-2",
+            "distilled"
+          ]
+        }
+      ],
+      "notes": "ComfyUI also ships LTX workflows in its Templates menu; this is an official repo example."
+    },
+    {
+      "id": "cogvideox_t2v",
+      "title": "CogVideoX T2V (ComfyUI-CogVideoXWrapper example workflow)",
+      "family": "cogvideox",
+      "source_url": "https://raw.githubusercontent.com/kijai/ComfyUI-CogVideoXWrapper/main/example_workflows/cogvideox_1_0_5b_T2V_02.json",
+      "file_name": "cogvideox_5b_t2v_wrapper.json",
+      "required_models": [],
+      "notes": "Wrapper auto-downloads some assets; see wrapper README."
+    },
+    {
+      "id": "cogvideox_i2v",
+      "title": "CogVideoX I2V (ComfyUI-CogVideoXWrapper example workflow)",
+      "family": "cogvideox",
+      "source_url": "https://raw.githubusercontent.com/kijai/ComfyUI-CogVideoXWrapper/main/example_workflows/cogvideox_1_5_5b_I2V_01.json",
+      "file_name": "cogvideox_5b_i2v_wrapper.json",
+      "required_models": [],
+      "notes": "Requires installing ComfyUI-CogVideoXWrapper custom nodes."
+    }
+  ]
+}

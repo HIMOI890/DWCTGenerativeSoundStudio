@@ -1,0 +1,95 @@
+# Enhanced Deforum Music Generator Configuration
+# Customize these settings to match your setup
+
+audio:
+  sample_rate: 22050
+  chunk_size: 30
+  chunk_threshold: 60
+  max_duration: 600  # 10 minutes max
+  cache_dir: "data/cache"
+  enable_noise_reduction: true
+  normalize_audio: true
+  beat_track_units: "time"
+
+lyrics:
+  enabled: true
+  provider: "whisper"  # whisper, azure, google
+  model: "base"  # tiny, base, small, medium, large
+  language: null  # auto-detect
+  device: "auto"  # auto, cpu, cuda
+  compute_type: "float16"
+  beam_size: 5
+  best_of: 5
+  temperature: 0.0
+
+animation:
+  fps: 30
+  duration: 60
+  resolution: "512x512"
+  sampler: "DPM++ 2M Karras"
+  steps: 20
+  cfg_scale_base: 7.0
+  cfg_scale_range: 3.0
+  strength_base: 0.8
+  strength_range: 0.2
+  zoom_base: 1.0
+  zoom_range: 0.05
+  rotation_range: 2.0
+  translation_range: 10.0
+
+a1111:
+  enabled: true
+  host: "127.0.0.1"
+  port: 7860
+  timeout: 120
+  use_https: false
+  auth_username: null
+  auth_password: null
+  model_checkpoint: null  # Use currently loaded model
+  vae: null
+  batch_size: 1
+  enable_hr: false
+  hr_scale: 2.0
+  hr_upscaler: "Latent"
+
+cloud:
+  enabled: false
+  provider: "aws"  # aws, azure, gcp
+  bucket_name: ""
+  region: "us-east-1"
+  access_key: null
+  secret_key: null
+  endpoint_url: null
+
+advanced:
+  enable_multitrack: false
+  enable_style_transfer: false
+  enable_preview: true
+  enable_cloud_storage: false
+  enable_batch_processing: false
+  enable_real_time: false
+  max_concurrent_jobs: 2
+  preview_fps: 10
+  preview_resolution: "256x256"
+
+interface:
+  server_port: 7861
+  server_host: "127.0.0.1"
+  enable_sharing: false
+  share_server_name: null
+  share_server_port: null
+  auto_open_browser: true
+  show_error_details: true
+  max_file_size: 500  # MB
+  allowed_extensions: [".mp3", ".wav", ".flac", ".m4a", ".ogg"]
+  theme: "default"
+  title: "🎶 Enhanced Deforum Music Generator"
+
+logging:
+  level: "INFO"
+  format: "[%(levelname)s] %(asctime)s - %(name)s - %(message)s"
+  file_logging: true
+  log_file: "data/logs/deforum_music.log"
+  max_file_size: 10  # MB
+  backup_count: 5
+  console_logging: true

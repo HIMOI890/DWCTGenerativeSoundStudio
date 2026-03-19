@@ -1,0 +1,3 @@
+# DirectML path (Windows iGPU/AMD/NVIDIA without CUDA)
+onnxruntime-directml>=1.18.0
+optimum[onnxruntime]>=1.19.0

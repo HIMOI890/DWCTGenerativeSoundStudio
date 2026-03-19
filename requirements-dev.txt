@@ -1,0 +1,8 @@
+# Dev install: full + developer tooling
+-r requirements-full.txt
+
+pytest>=8.0.0
+ruff>=0.6.0
+black>=24.0.0
+mypy>=1.7.0
+types-requests

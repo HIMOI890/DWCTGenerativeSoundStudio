@@ -1,0 +1,76 @@
+{
+  "name": "edmg-studio",
+  "version": "1.1.0",
+  "private": true,
+  "description": "EDMG Studio desktop app",
+  "author": "Dwct",
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "build": "vite build",
+    "lint": "eslint src main.mjs preload.cjs electron scripts --max-warnings=0",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "release:stage-desktop": "node scripts/release-stage-desktop.mjs",
+    "validate:electron-bridge": "node --check main.mjs && node --check preload.cjs && node --check electron/main.mjs && node --check electron/preload.cjs",
+    "validate:desktop-integration": "node scripts/desktop-integration-harness.mjs",
+    "validate:packaged-desktop-smoke": "node scripts/packaged-desktop-smoke.mjs",
+    "validate:desktop": "npm run typecheck && npm run build && node scripts/prepare-electron-build.mjs && npm run release:stage-desktop && npm run validate:electron-bridge && npm run validate:desktop-integration && npm run validate:packaged-desktop-smoke",
+    "build:electron": "vite build && node scripts/prepare-electron-build.mjs && npm run release:stage-desktop && electron-builder --dir -c.directories.app=release/staged-app",
+    "dist:win": "vite build && node scripts/prepare-electron-build.mjs && npm run release:stage-desktop && electron-builder -w --x64 -c.directories.app=release/staged-app"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.19.15",
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.7",
+    "@typescript-eslint/eslint-plugin": "^8.57.1",
+    "@typescript-eslint/parser": "^8.57.1",
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.1",
+    "electron": "41.0.3",
+    "electron-builder": "^26.8.1",
+    "eslint": "^10.0.3",
+    "globals": "^17.4.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.0",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.dwct.edmgstudio",
+    "productName": "EDMG Studio",
+    "directories": {
+      "output": "dist",
+      "buildResources": "electron-resources"
+    },
+    "files": [
+      "dist/**",
+      "main.mjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "electron-resources",
+        "to": ".",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "${name} Setup ${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
+    }
+  }
+}

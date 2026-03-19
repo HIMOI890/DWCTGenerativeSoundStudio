@@ -1,0 +1,7 @@
+EDMG Style Kit (Step21 Layout)
+
+Placement:
+- Root: .editorconfig, CONTRIBUTING.md, .pre-commit-config.yaml, mypy.ini
+- Docs: docs/architecture.md, docs/adr/*
+- Node package: studio/edmg-studio/* (eslint/prettier configs)
+- Patch file: PATCH_studio_edmg-studio_python_backend_pyproject.toml.append.txt

@@ -1,0 +1,149 @@
+{
+  "version": "1.0",
+  "models": [
+    {
+      "name": "wan2.2-ti2v-5b",
+      "display_name": "Wan2.2 TI2V 5B (T2V/I2V, 720p)",
+      "repo_id": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+      "family": "wan",
+      "task": "ti2v",
+      "pipeline": "WanPipeline",
+      "recommended": {
+        "width": 1280,
+        "height": 704,
+        "num_frames": 121,
+        "fps": 24,
+        "dtype": "bfloat16",
+        "steps": 50,
+        "guidance_scale": 5.0
+      },
+      "notes": "Requires recent diffusers with WanPipeline/AutoencoderKLWan. Torch >= 2.4 recommended."
+    },
+    {
+      "name": "hunyuan15-720p-t2v",
+      "display_name": "HunyuanVideo-1.5 720p T2V",
+      "repo_id": "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v",
+      "family": "hunyuan_video15",
+      "task": "t2v",
+      "pipeline": "HunyuanVideo15Pipeline",
+      "recommended": {
+        "width": 1280,
+        "height": 720,
+        "num_frames": 121,
+        "fps": 24,
+        "dtype": "bfloat16",
+        "steps": 50,
+        "guidance_scale": 7.0
+      },
+      "notes": "May benefit from attention backends (e.g., kernels)."
+    },
+    {
+      "name": "hunyuan15-720p-i2v",
+      "display_name": "HunyuanVideo-1.5 720p I2V",
+      "repo_id": "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v",
+      "family": "hunyuan_video15",
+      "task": "i2v",
+      "pipeline": "HunyuanVideo15ImageToVideoPipeline",
+      "recommended": {
+        "width": 1280,
+        "height": 720,
+        "num_frames": 121,
+        "fps": 24,
+        "dtype": "bfloat16",
+        "steps": 50,
+        "guidance_scale": 7.0
+      },
+      "notes": "Requires input image."
+    },
+    {
+      "name": "cogvideox-5b-t2v",
+      "display_name": "CogVideoX 5B (T2V)",
+      "repo_id": "THUDM/CogVideoX-5b",
+      "family": "cogvideox",
+      "task": "t2v",
+      "pipeline": "CogVideoXPipeline",
+      "recommended": {
+        "width": 720,
+        "height": 480,
+        "num_frames": 49,
+        "fps": 8,
+        "dtype": "float16",
+        "steps": 30,
+        "guidance_scale": 6.0
+      },
+      "notes": "Uses diffusers CogVideoX pipelines."
+    },
+    {
+      "name": "cogvideox-5b-i2v",
+      "display_name": "CogVideoX 5B I2V",
+      "repo_id": "THUDM/CogVideoX-5b-I2V",
+      "family": "cogvideox",
+      "task": "i2v",
+      "pipeline": "CogVideoXImageToVideoPipeline",
+      "recommended": {
+        "width": 720,
+        "height": 480,
+        "num_frames": 49,
+        "fps": 8,
+        "dtype": "float16",
+        "steps": 30,
+        "guidance_scale": 6.0
+      },
+      "notes": "Requires input image."
+    },
+    {
+      "name": "svd-xt-img2vid",
+      "display_name": "Stable Video Diffusion XT (Image-to-Video)",
+      "repo_id": "stabilityai/stable-video-diffusion-img2vid-xt",
+      "family": "svd",
+      "task": "i2v",
+      "pipeline": "StableVideoDiffusionPipeline",
+      "recommended": {
+        "width": 1024,
+        "height": 576,
+        "num_frames": 25,
+        "fps": 6,
+        "dtype": "float16",
+        "steps": 25,
+        "guidance_scale": 3.0
+      },
+      "notes": "Image-to-video only."
+    },
+    {
+      "name": "wan2.2-t2v-a14b",
+      "display_name": "Wan2.2 T2V A14B MoE (Text-to-Video, 480p/720p)",
+      "repo_id": "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+      "family": "wan",
+      "task": "t2v",
+      "pipeline": "WanPipeline",
+      "recommended": {
+        "width": 1280,
+        "height": 704,
+        "num_frames": 121,
+        "fps": 24,
+        "dtype": "bfloat16",
+        "steps": 50,
+        "guidance_scale": 5.0
+      },
+      "notes": "Very large (MoE). Prefer high VRAM; can run slower/offload."
+    },
+    {
+      "name": "ltx-video-0.9.8-13b-distilled",
+      "display_name": "LTX-Video 0.9.8 13B Distilled (I2V, Diffusers ConditionPipeline)",
+      "repo_id": "Lightricks/LTX-Video-0.9.8-13B-distilled",
+      "family": "ltx",
+      "task": "i2v",
+      "pipeline": "LTXConditionPipeline",
+      "recommended": {
+        "width": 1216,
+        "height": 704,
+        "num_frames": 121,
+        "fps": 24,
+        "dtype": "bfloat16",
+        "steps": 8,
+        "guidance_scale": 1.0
+      },
+      "notes": "Often used with optional spatial upscaler: Lightricks/ltxv-spatial-upscaler-0.9.8. Model expects video-compressed condition; see CLI --family ltx."
+    }
+  ]
+}

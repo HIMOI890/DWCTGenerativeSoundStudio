@@ -1,0 +1,95 @@
+
+    Directory: U:\sd.webui\extensions\enhanced-deforum-music-generator\src\enhanced_deforum_music_generator\api
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---            9/4/2025  6:29 AM              0 __init__.py
+-a---            9/5/2025  2:29 AM            791 analysis.py
+-a---            9/5/2025  2:30 AM            481 deforum.py
+-a---            9/5/2025  2:04 AM            131 health.py
+-a---            9/5/2025  2:37 AM            367 main.py
+-a---            9/5/2025  2:31 AM            275 status.py
+
+    Directory: U:\sd.webui\extensions\enhanced-deforum-music-generator\src\enhanced_deforum_music_generator\config
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---           9/11/2025 12:01 PM             29 __init__.py
+-a---           8/27/2025  5:27 PM          12685 config_system.py
+
+    Directory: U:\sd.webui\extensions\enhanced-deforum-music-generator\src\enhanced_deforum_music_generator\core
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---           9/11/2025 12:01 PM            110 __init__.py
+-a---            9/7/2025  1:27 AM           9198 audio_analyzer.py
+-a---           9/12/2025  7:46 AM          17135 generator.py
+-a---           8/27/2025  5:29 PM          17413 lyrics_analyzer.py
+-a---            9/8/2025 10:35 AM            547 models.py
+-a---           9/11/2025  5:23 PM           1871 nlp_processor.py
+-a---            9/7/2025  1:27 AM          17103 scheduler.py
+
+    Directory: U:\sd.webui\extensions\enhanced-deforum-music-generator\src\enhanced_deforum_music_generator\integrations
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---           9/11/2025 12:01 PM              0 __init__.py
+-a---           8/27/2025  5:28 PM           8859 a1111_connector.py
+-a---           9/11/2025 11:23 AM            337 cloud_integration.py
+
+    Directory: U:\sd.webui\extensions\enhanced-deforum-music-generator\src\enhanced_deforum_music_generator\interface
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---           9/11/2025 12:01 PM              0 __init__.py
+-a---           8/27/2025  5:28 PM          17405 gradio_interface.py
+
+    Directory: U:\sd.webui\extensions\enhanced-deforum-music-generator\src\enhanced_deforum_music_generator\presets
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---            9/8/2025 12:05 PM              0 __init__.py
+
+    Directory: U:\sd.webui\extensions\enhanced-deforum-music-generator\src\enhanced_deforum_music_generator\tests
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---            9/5/2025  2:35 AM            717 conftest.py
+-a---            9/5/2025 10:01 PM            816 test_a1111_connector.py
+-a---            9/5/2025  2:34 AM            405 test_api.py
+-a---            9/5/2025  9:59 PM            736 test_audio_analyzer.py
+-a---            9/5/2025  2:03 AM            395 test_deforum_generator.py
+-a---            9/5/2025 10:00 PM            615 test_nlp_processor.py
+-a---            9/5/2025 10:00 PM            509 test_scheduler.py
+
+    Directory: U:\sd.webui\extensions\enhanced-deforum-music-generator\src\enhanced_deforum_music_generator\utils
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---           9/11/2025 12:01 PM             28 __init__.py
+-a---           8/27/2025  5:28 PM           8765 utils_modules.py
+
+    Directory: U:\sd.webui\extensions\enhanced-deforum-music-generator\src\enhanced_deforum_music_generator\visual
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---            9/9/2025  2:57 AM             12 __init__.py
+-a---            9/9/2025  2:57 AM           1627 visual_mapper.py
+
+    Directory: U:\sd.webui\extensions\enhanced-deforum-music-generator\src\enhanced_deforum_music_generator
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a---           9/11/2025  5:23 PM            112 __init__.py
+-a---            9/6/2025  3:42 AM          36321 advanced_features.py
+-a---            9/7/2025  1:27 AM          10064 config_system_complete.py
+-a---           9/12/2025  7:05 AM           6112 enhanced_deforum_music_generator_extensions.py
+-a---            9/1/2025  4:22 AM          46884 enhanced_deforum_music_generator.py
+-a---            9/2/2025  1:32 AM          26732 enhanced_nlp_ai_module.py
+-a---            9/6/2025  6:15 AM            808 hybrid_main.py
+-a---           9/11/2025 11:58 AM            523 models.py
+-a---            9/8/2025 12:05 PM            328 multitrack.py
+-a---            9/4/2025  5:46 AM          29598 optimized_components.py
+-a---            9/8/2025 12:05 PM            249 preview_generator.py
+-a---            9/8/2025 12:05 PM            370 style_transfer.py
+

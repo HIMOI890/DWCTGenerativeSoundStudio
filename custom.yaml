@@ -1,0 +1,29 @@
+audio:
+  max_duration: 1800
+  sample_rate: 22050
+
+lyrics:
+  provider: whisper
+  model: tiny
+
+animation:
+  fps: 24
+  duration: 60
+
+a1111:
+  host: "127.0.0.1"
+  port: 7860
+  timeout: 120
+
+interface:
+  server_port: 7861
+  enable_sharing: false
+  auto_open_browser: false
+  show_error_details: true
+
+advanced:
+  enable_preview: true
+  enable_multitrack: false
+  enable_style_transfer: false
+  enable_cloud_storage: false
+  cloud_provider: aws

@@ -1,0 +1,33 @@
+{
+  "nodes": [
+    {
+      "url": "http://127.0.0.1:8188",
+      "max_inflight": 1,
+      "cost": 0.0,
+      "tags": [
+        "sdxl",
+        "animatediff"
+      ],
+      "checkpoint_regex": [
+        "sdxl_.*\\.safetensors$",
+        "sdxl.*"
+      ],
+      "requires_nodes": [
+        "ADE_StandardStaticContextOptions",
+        "ADE_AnimateDiffLoaderGen1"
+      ]
+    },
+    {
+      "url": "http://192.168.1.50:8188",
+      "max_inflight": 2,
+      "cost": 0.5,
+      "tags": [
+        "sd15"
+      ],
+      "checkpoint_regex": [
+        "v1-5.*",
+        "sd15.*"
+      ]
+    }
+  ]
+}

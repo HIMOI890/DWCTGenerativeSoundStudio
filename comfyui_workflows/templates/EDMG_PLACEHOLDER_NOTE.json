@@ -1,0 +1,33 @@
+{
+  "last_node_id": 1,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Note",
+      "pos": [
+        320,
+        260
+      ],
+      "size": [
+        760,
+        260
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "EDMG ComfyUI Workflow Note"
+      },
+      "widgets_values": [
+        "This is a placeholder EDMG workflow.\n\nUse scripts/fetch_comfyui_workflows.py to download real workflows into comfyui_workflows/downloaded/ and open those in ComfyUI."
+      ]
+    }
+  ],
+  "links": [],
+  "groups": [],
+  "config": {},
+  "extra": {}
+}

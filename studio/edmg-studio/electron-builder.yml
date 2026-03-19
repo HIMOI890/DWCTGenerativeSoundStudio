@@ -1,0 +1,29 @@
+appId: com.dwct.edmgstudio
+productName: DWCT EDMG Studio
+
+files:
+  - "dist/**"
+  - "main.mjs"
+  - "preload.cjs"
+  - "package.json"
+
+extraResources:
+  - from: "electron-resources"
+    to: "edmg"
+    filter:
+      - "**/*"
+
+directories:
+  output: "release"
+
+win:
+  target:
+    - nsis
+  artifactName: "DWCT-EDMG-Studio-${version}-Setup.${ext}"
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false

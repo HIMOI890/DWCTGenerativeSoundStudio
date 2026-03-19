@@ -1,0 +1,15 @@
+{
+  "jobDefinitionName": "edmg-studio-worker",
+  "type": "container",
+  "containerProperties": {
+    "image": "<YOUR_ECR_IMAGE_URI>",
+    "vcpus": 4,
+    "memory": 16384,
+    "environment": [
+      {"name": "EDMG_S3_BUCKET_IN", "value": "<bucket>"},
+      {"name": "EDMG_S3_KEY_IN", "value": "<key/to/bundle.zip>"},
+      {"name": "EDMG_S3_BUCKET_OUT", "value": "<bucket>"},
+      {"name": "EDMG_S3_PREFIX_OUT", "value": "outputs/<job-id>/"}
+    ]
+  }
+}
