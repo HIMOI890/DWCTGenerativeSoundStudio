@@ -64,6 +64,7 @@ external/*
 desktop/electron/node_modules/
 node_modules/
 studio/edmg-studio/dist/
+studio/edmg-studio/dist-sim/
 studio/edmg-studio/release/
 studio/edmg-studio/tmp/
 studio/edmg-studio/data/
@@ -79,4 +80,5 @@ studio/edmg-studio/electron-resources/bin/*.exe
 Thumbs.db
 Desktop.ini
 *.code-workspace
+.vs/
 .vscode/

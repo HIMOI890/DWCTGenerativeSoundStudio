@@ -12,6 +12,13 @@ function Assert-Command($name) {
   }
 }
 
+function Invoke-Checked($label, [scriptblock]$action) {
+  & $action
+  if ($LASTEXITCODE -ne 0) {
+    throw ($label + " failed with exit code " + $LASTEXITCODE)
+  }
+}
+
 function Resolve-BackendPackageDir($PyBackendDir) {
   $candidates = @(
     (Join-Path $PyBackendDir "edmg_studio_backend"),
@@ -45,7 +52,9 @@ function Ensure-BundledFfmpeg($RepoRoot, $StudioDir) {
   }
 
   Write-Host "[info] Bundled FFmpeg missing; downloading/staging it now..." -ForegroundColor Yellow
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $script -OutDir "./studio/edmg-studio/electron-resources/bin"
+  Invoke-Checked "stage bundled FFmpeg" {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $script -OutDir "./studio/edmg-studio/electron-resources/bin"
+  }
 
   if (-not (Test-Path $bundled)) {
     throw "Bundled FFmpeg staging failed: $bundled"
@@ -231,10 +240,18 @@ if (-not (Test-Path $VenvPython)) {
   throw "Virtual environment python not found: $VenvPython"
 }
 
-& $VenvPython -m pip install -U pip wheel setuptools
-& $VenvPython -m pip install -e ".[studio_bundle]"
-& $VenvPython -m pip install pyinstaller
-& $VenvPython -m PyInstaller .\pyinstaller.spec --clean --noconfirm
+Invoke-Checked "upgrade backend packaging tools" {
+  & $VenvPython -m pip install -U pip wheel setuptools
+}
+Invoke-Checked "install backend bundle" {
+  & $VenvPython -m pip install -e ".[studio_bundle]"
+}
+Invoke-Checked "install pyinstaller" {
+  & $VenvPython -m pip install pyinstaller
+}
+Invoke-Checked "build backend via pyinstaller" {
+  & $VenvPython -m PyInstaller .\pyinstaller.spec --clean --noconfirm
+}
 
 $BackendExe = Join-Path $PyBackendDir "dist\edmg-studio-backend\edmg-studio-backend.exe"
 if (-not (Test-Path $BackendExe)) {
@@ -254,13 +271,26 @@ Copy-Item -Force $BackendExe (Join-Path $BackendDstDir "edmg-studio-backend.exe"
 Write-Host "[3/4] Installing UI dependencies..."
 Push-Location $StudioDir
 if (Test-Path "package-lock.json") {
-  & $NpmExe ci
+  try {
+    Invoke-Checked "npm ci" {
+      & $NpmExe ci
+    }
+  } catch {
+    Write-Host ("[warn] npm ci failed; retrying with npm install. " + $_.Exception.Message) -ForegroundColor Yellow
+    Invoke-Checked "npm install fallback" {
+      & $NpmExe install
+    }
+  }
 } else {
-  & $NpmExe install
+  Invoke-Checked "npm install" {
+    & $NpmExe install
+  }
 }
 
 Write-Host "[4/4] Building installer (electron-builder)..."
-& $NpmExe run dist:win
+Invoke-Checked "npm run dist:win" {
+  & $NpmExe run dist:win
+}
 Pop-Location
 
 Write-Host "Done. See: studio/edmg-studio/release/" -ForegroundColor Green
