@@ -63,6 +63,7 @@ from .services.model_manager import ModelManager
 from .services.secrets import SecretStore
 from .services.setup_wizard import (
     SetupTaskManager,
+    check_backend_bundle,
     check_ollama,
     download_and_run_ollama_installer,
     pull_ollama_model,
@@ -71,6 +72,7 @@ from .services.setup_wizard import (
     check_ffmpeg,
     comfy_portable_installed,
     download_and_install_7zip,
+    install_backend_bundle,
     _find_7z_exe,
 )
 
@@ -935,6 +937,7 @@ def setup_status():
         }
 
     ff = check_ffmpeg(settings.ffmpeg_path)
+    backend_bundle = check_backend_bundle()
     edmg = core_status()
     if not edmg.get("available"):
         edmg.setdefault(
@@ -952,6 +955,7 @@ def setup_status():
 
     return {
             "ok": True,
+            "backend_bundle": backend_bundle,
             "ollama": ollama,
             "comfyui": comfy_status,
             "ffmpeg": ff,
@@ -983,33 +987,68 @@ def setup_7zip_install():
     task = setup_tasks.start("install_7zip", download_and_install_7zip, settings.data_dir)
     return {"ok": True, "task": task.__dict__}
 
+@app.post("/v1/setup/backend/install")
+def setup_backend_install(payload: dict[str, Any]):
+    bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
+    task = setup_tasks.start(f"install_backend_bundle:{bundle}", install_backend_bundle, bundle)
+    return {"ok": True, "task": task.__dict__}
+
 @app.post("/v1/setup/full/install")
 def setup_full_install(payload: dict[str, Any]):
-    """Run a full one-click setup: 7-Zip (if needed), Ollama installer, pull model, ComfyUI Portable install + start."""
+    """Run a full one-click setup: backend bundle, 7-Zip, Ollama/model, ComfyUI Portable install + start."""
     import os
 
     flavor = (payload or {}).get("flavor") or "cpu"
     port = int((payload or {}).get("comfy_port") or 8188)
+    bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
     model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct")
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
 
     def _run(task):
-        # 1) Ensure 7-Zip for .7z extraction
+        # 1) Ensure backend runtime bundle is present for audio/ASR/internal render paths.
+        if not check_backend_bundle(bundle).get("ok"):
+            install_backend_bundle(task, bundle)
+        else:
+            SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` already installed.")
+
+        # 2) Ensure 7-Zip for .7z extraction
         try:
             _find_7z_exe(settings.data_dir)
         except Exception:
             download_and_install_7zip(task, settings.data_dir)
 
-        # 2) Ollama installer (downloads and runs)
-        dest = settings.data_dir / "third_party" / "_installers"
-        download_and_run_ollama_installer(task, dest)
+        # 3) Ollama installer (downloads and runs only when missing)
+        ollama_status = check_ollama(ollama_url, model)
+        if not ollama_status.get("ok"):
+            dest = settings.data_dir / "third_party" / "_installers"
+            download_and_run_ollama_installer(task, dest)
+        else:
+            SetupTaskManager.log(task, "Ollama is already reachable.")
 
-        # 3) Pull default model
-        pull_ollama_model(task, ollama_url, model)
+        # 4) Pull default model when it is not already present
+        ollama_status = check_ollama(ollama_url, model)
+        if not ollama_status.get("model_present"):
+            pull_ollama_model(task, ollama_url, model)
+        else:
+            SetupTaskManager.log(task, f"Ollama model {model} is already present.")
 
-        # 4) ComfyUI Portable install + start
-        download_and_extract_portable(task, settings.data_dir, flavor)
-        comfy_portable.start(settings.data_dir, flavor, "127.0.0.1", port)
+        # 5) ComfyUI Portable install + start
+        if not comfy_portable_installed(settings.data_dir):
+            download_and_extract_portable(task, settings.data_dir, flavor)
+        else:
+            SetupTaskManager.log(task, "ComfyUI Portable is already installed.")
+
+        comfy_ready = False
+        try:
+            diag = comfy_pool.diagnose({})
+            comfy_ready = bool(diag.get("compatible") or diag.get("busy_compatible"))
+        except Exception:
+            comfy_ready = False
+
+        if comfy_ready:
+            SetupTaskManager.log(task, "ComfyUI is already reachable.")
+        else:
+            comfy_portable.start(task, settings.data_dir, flavor, "127.0.0.1", port)
 
     task = setup_tasks.start(f"full_setup:{flavor}", _run)
     return {"ok": True, "task": task.__dict__}
@@ -1493,14 +1532,22 @@ def analyze_audio(project_id: str):
             "energy": energy,
         }
     except Exception:
-        # Fallback to the AI service feature extractor (lightweight).
+        # Fallback to local feature extractors so audio analysis does not depend on the AI client.
         try:
-            feats = ai.audio_features(str(audio_path))
+            from edmg_ai_service.audio import lightweight_audio_features  # type: ignore
+
+            feats = lightweight_audio_features(str(audio_path))
         except Exception as e:
             feats = {"error": f"audio_features failed: {e}"}
 
     try:
-        trans = ai.transcribe(str(audio_path), model_size="small")
+        from edmg_ai_service.asr import transcribe as local_transcribe  # type: ignore
+
+        transcript_result = local_transcribe(str(audio_path), model_size="small")
+        if isinstance(transcript_result, dict):
+            trans = transcript_result
+        else:
+            trans = {"text": str(transcript_result or "")}
     except Exception as e:
         trans = {"error": f"transcribe failed: {e}"}
 
@@ -1508,6 +1555,15 @@ def analyze_audio(project_id: str):
     proj.meta["analysis"] = analysis
     store.save(proj)
     return {"ok": True, "analysis": analysis}
+
+
+def _analysis_transcript_text(analysis: dict[str, Any]) -> str:
+    raw = (analysis or {}).get("transcript")
+    if isinstance(raw, dict):
+        return str(raw.get("text") or "")
+    if isinstance(raw, str):
+        return raw
+    return ""
 
 def _coerce_float_list(v: Any) -> list[float]:
     if not v:
@@ -1542,11 +1598,7 @@ def _build_public_audio_analysis(proj: Any) -> Any:
             energy = [(e - mn) / (mx - mn) for e in energy]
         energy = [max(0.0, min(1.0, float(e))) for e in energy]
 
-    transcript = ""
-    try:
-        transcript = str((analysis.get("transcript") or {}).get("text") or "")
-    except Exception:
-        transcript = ""
+    transcript = _analysis_transcript_text(analysis)
 
     try:
         from enhanced_deforum_music_generator.public_api import AudioAnalysis  # type: ignore
@@ -1664,7 +1716,7 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
         raise HTTPException(404, "Project not found")
     analysis = proj.meta.get("analysis") or {}
     feats = (analysis.get("features") or {})
-    transcript = (analysis.get("transcript") or {}).get("text")
+    transcript = _analysis_transcript_text(analysis)
 
     payload = {
         "title": req.title or proj.name,

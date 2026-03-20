@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import os
 import platform
 import subprocess
 import shutil
+import sys
 import threading
 import time
 import uuid
@@ -456,6 +458,95 @@ def check_ffmpeg(ffmpeg_path: str) -> dict[str, Any]:
             "error": str(e),
             "hint": hint,
         }
+
+
+BACKEND_BUNDLE_MODULES: dict[str, dict[str, str]] = {
+    "audio": {
+        "librosa": "librosa",
+        "soundfile": "soundfile",
+    },
+    "asr": {
+        "faster-whisper": "faster_whisper",
+    },
+    "internal": {
+        "diffusers": "diffusers",
+        "transformers": "transformers",
+        "accelerate": "accelerate",
+        "safetensors": "safetensors",
+        "torch": "torch",
+    },
+}
+
+BACKEND_BUNDLE_ALIASES: dict[str, tuple[str, ...]] = {
+    "full": ("audio", "asr", "internal"),
+    "studio_bundle": ("audio", "asr", "internal"),
+}
+
+
+def _backend_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _bundle_module_map(bundle: str) -> dict[str, str]:
+    keys = BACKEND_BUNDLE_ALIASES.get(bundle, (bundle,))
+    modules: dict[str, str] = {}
+    for key in keys:
+        modules.update(BACKEND_BUNDLE_MODULES.get(key, {}))
+    return modules
+
+
+def check_backend_bundle(bundle: str = "studio_bundle") -> dict[str, Any]:
+    modules = _bundle_module_map(bundle)
+    missing = sorted(
+        package_name
+        for package_name, module_name in modules.items()
+        if importlib.util.find_spec(module_name) is None
+    )
+    return {
+        "ok": not missing,
+        "bundle": bundle,
+        "python": sys.executable,
+        "backend_root": str(_backend_root()),
+        "missing": missing,
+        "hint": None if not missing else (
+            f"Install backend runtime deps with `pip install -e .[{bundle}]` from python_backend, "
+            "or run Setup -> Full Setup."
+        ),
+    }
+
+
+def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle") -> None:
+    root = _backend_root()
+    pyproject = root / "pyproject.toml"
+    if not pyproject.exists():
+        raise RuntimeError(f"Backend pyproject.toml not found at {pyproject}")
+
+    SetupTaskManager.log(task, f"Installing backend runtime bundle `{bundle}`...")
+    SetupTaskManager.set_progress(task, 0.1)
+
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"],
+        cwd=str(root),
+    )
+
+    SetupTaskManager.set_progress(task, 0.35)
+    SetupTaskManager.log(task, f"Running pip install -e .[{bundle}]")
+
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "-e", f".[{bundle}]"],
+        cwd=str(root),
+    )
+
+    SetupTaskManager.set_progress(task, 0.9)
+    status = check_backend_bundle(bundle)
+    if not status["ok"]:
+        missing = ", ".join(status["missing"]) or "unknown modules"
+        raise RuntimeError(
+            f"Backend runtime bundle `{bundle}` installed, but imports are still missing: {missing}"
+        )
+
+    SetupTaskManager.set_progress(task, 1.0)
+    SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` is ready.")
 
 
 def download_and_install_7zip(task: SetupTask, data_dir: Path) -> None:

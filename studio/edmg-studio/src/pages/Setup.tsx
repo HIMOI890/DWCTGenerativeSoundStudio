@@ -71,6 +71,7 @@ async function run(action: string, path: string, body: any = {}) {
   const modelOk = !!status?.ollama?.model_present;
   const comfyOk = !!status?.comfyui?.ok;
   const ffOk = !!status?.ffmpeg?.ok;
+  const backendBundleOk = !!status?.backend_bundle?.ok;
   const edmgOk = !!status?.edmg?.available;
   const sevenOk = !!status?.sevenzip?.ok;
 
@@ -229,13 +230,13 @@ async function run(action: string, path: string, body: any = {}) {
           </div>
         </div>
 
-        <div className="card">
+<div className="card">
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
     <div style={{ fontWeight: 800 }}>0) Full System Setup (One-Click)</div>
-    <Badge ok={ollamaOk && comfyOk && ffOk} label={(ollamaOk && comfyOk && ffOk) ? "Ready" : "Setup"} />
+    <Badge ok={backendBundleOk && ollamaOk && modelOk && comfyOk && ffOk} label={(backendBundleOk && ollamaOk && modelOk && comfyOk && ffOk) ? "Ready" : "Setup"} />
   </div>
   <div className="small" style={{ marginTop: 6 }}>
-    Runs the full installer pipeline: 7-Zip (if needed) → Ollama installer → pull model → ComfyUI Portable install + start.
+    Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → Ollama installer → pull model → ComfyUI Portable install + start.
   </div>
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
     <button
@@ -251,6 +252,34 @@ async function run(action: string, path: string, body: any = {}) {
       {busy === "full_nvidia" ? "Running…" : "Full Setup (NVIDIA)"}
     </button>
   </div>
+</div>
+
+<div className="card">
+  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div style={{ fontWeight: 800 }}>0.25) Backend Runtime Bundle</div>
+    <Badge ok={backendBundleOk} label={backendBundleOk ? "OK" : "Missing"} />
+  </div>
+  <div className="small" style={{ marginTop: 6 }}>
+    Installs the backend audio, ASR, and internal-render Python dependencies into the Studio backend environment.
+  </div>
+  <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
+    <button
+      disabled={busy === "backend_bundle"}
+      onClick={() => run("backend_bundle", "/v1/setup/backend/install", { bundle: "studio_bundle" })}
+    >
+      {busy === "backend_bundle" ? "Installing…" : "Install Backend Runtime"}
+    </button>
+  </div>
+  {!backendBundleOk && status?.backend_bundle?.hint && (
+    <div className="small" style={{ marginTop: 10 }}>
+      Fix: {status.backend_bundle.hint}
+    </div>
+  )}
+  {!!status?.backend_bundle?.missing?.length && (
+    <div className="small" style={{ marginTop: 10, opacity: 0.9 }}>
+      Missing modules: <code>{status.backend_bundle.missing.join(", ")}</code>
+    </div>
+  )}
 </div>
 
 <div className="card">
@@ -512,11 +541,11 @@ async function run(action: string, path: string, body: any = {}) {
         <div className="card">
           <div style={{ fontWeight: 800 }}>Ready check</div>
           <div className="small" style={{ marginTop: 6 }}>
-            When Ollama + a model + ComfyUI + FFmpeg are all OK, EDMG Studio is ready to generate. EDMG Core is optional but recommended for the fully unified workflow.
+            When the backend runtime bundle + Ollama + a model + ComfyUI + FFmpeg are all OK, EDMG Studio is ready to generate. EDMG Core is optional but recommended for the fully unified workflow.
           </div>
           <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
             <button
-              disabled={!(ollamaOk && modelOk && comfyOk && ffOk)}
+              disabled={!(backendBundleOk && ollamaOk && modelOk && comfyOk && ffOk)}
               onClick={() => onNavigate?.("workspace")}
             >
               Go to Workspace
