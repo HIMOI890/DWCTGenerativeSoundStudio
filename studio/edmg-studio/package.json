@@ -16,6 +16,7 @@
     "validate:electron-bridge": "node --check main.mjs && node --check preload.cjs && node --check electron/main.mjs && node --check electron/preload.cjs",
     "validate:desktop-integration": "node scripts/desktop-integration-harness.mjs",
     "validate:packaged-desktop-smoke": "node scripts/packaged-desktop-smoke.mjs",
+    "validate:packaged-customer-flow": "node scripts/packaged-customer-flow.mjs",
     "validate:desktop": "npm run typecheck && npm run build && npm run prepare:release-bundle && npm run release:stage-desktop && npm run validate:electron-bridge && npm run validate:desktop-integration && npm run validate:packaged-desktop-smoke",
     "build:electron": "vite build && npm run prepare:release-bundle && npm run release:stage-desktop && node scripts/run-electron-builder.mjs --dir -c.directories.app=release/staged-app",
     "dist:win": "vite build && npm run prepare:release-bundle && npm run release:stage-desktop && node scripts/run-electron-builder.mjs -w --x64 -c.directories.app=release/staged-app"

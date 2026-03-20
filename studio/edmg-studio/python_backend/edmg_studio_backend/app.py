@@ -12,6 +12,7 @@ from copy import deepcopy
 import math
 import re
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -3102,6 +3103,16 @@ def _preset_defaults(preset: str) -> dict[str, Any]:
     return {"stills": {"width": 768, "height": 432, "steps": 20, "cfg": 6.5, "sampler": "euler"}, "motion": {"fps": 12, "max_frames": 48}}
 
 
+@lru_cache(maxsize=1)
+def _internal_diffusion_runtime_status() -> dict[str, Any]:
+    try:
+        import diffusers  # type: ignore  # noqa: F401
+        import torch  # type: ignore  # noqa: F401
+        return {"ok": True, "diagnostics": ["internal_runtime=ready"]}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "diagnostics": ["internal_runtime=missing"]}
+
+
 def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> dict[str, Any]:
     hw = _hardware_profile()
     preset_l = str(preset or "balanced").lower().strip()
@@ -3109,22 +3120,32 @@ def _recommend_local_fallback(project_id: str, preset: str, *, reason: str) -> d
     tier_plan = _build_internal_render_plan(hw, requested_tier=requested_tier)
     preferred = str(tier_plan.get("preferred_internal_model") or hw.get("preferred_internal_model") or "hf_sd15_internal")
     fallbacks = [preferred, "hf_sd15_internal", "hf_sdxl_internal"]
+    runtime = _internal_diffusion_runtime_status()
     picked = next((mid for mid in fallbacks if models.installed_path(mid)), None)
-    if picked:
+    if picked and runtime.get("ok"):
         return {
             "mode": "internal",
             "engine": "diffusion",
             "model_id": picked,
             "reason": f"{reason} Falling back to local internal render.",
-            "diagnostics": ["comfyui=unavailable", f"internal_model={picked}"],
+            "diagnostics": ["comfyui=unavailable", f"internal_model={picked}", *list(runtime.get("diagnostics") or [])],
             "tier_plan": tier_plan,
         }
+    diagnostics = ["comfyui=unavailable"]
+    if picked:
+        diagnostics.append(f"internal_model={picked}")
+    else:
+        diagnostics.append("internal_models=missing")
+    diagnostics.extend(list(runtime.get("diagnostics") or []))
+    proxy_reason = reason
+    if picked and not runtime.get("ok"):
+        proxy_reason = f"{reason} Internal diffusion runtime is not installed."
     return {
         "mode": "proxy",
         "engine": "proxy",
         "model_id": "proxy_draft",
-        "reason": f"{reason} Falling back to proxy draft render.",
-        "diagnostics": ["comfyui=unavailable", "internal_models=missing", f"project={project_id}"],
+        "reason": f"{proxy_reason} Falling back to proxy draft render.",
+        "diagnostics": diagnostics + [f"project={project_id}"],
         "tier_plan": tier_plan,
     }
 
@@ -3274,11 +3295,12 @@ def run_pipeline(project_id: str, variant_index: int = 0, preset: str = "balance
             allow_proxy_fallback=True,
         )
         res = render_internal_video(project_id, internal_req)
+        effective_mode = str(res.get("preflight", {}).get("mode") or rec["mode"])
         return {
             "ok": True,
             "preset": preset,
             "selected": rec,
-            "render_mode": rec["mode"],
+            "render_mode": effective_mode,
             "job": res.get("job"),
             "preflight": res.get("preflight"),
         }
