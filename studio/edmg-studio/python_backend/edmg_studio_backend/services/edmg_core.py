@@ -7,16 +7,32 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-def _repo_root() -> Path:
+def _find_repo_root() -> Path | None:
+    env_root = os.getenv("EDMG_STUDIO_REPO_ROOT", "").strip()
+    if env_root:
+        candidate = Path(env_root).expanduser().resolve()
+        if (candidate / "scripts" / "edmg_installer.py").exists():
+            return candidate
+
     cur = Path(__file__).resolve()
     for parent in cur.parents:
         if (parent / "scripts" / "edmg_installer.py").exists() and (parent / "studio" / "edmg-studio").exists():
             return parent
+    return None
+
+
+def _repo_root() -> Path:
+    root = _find_repo_root()
+    if root is not None:
+        return root
     raise RuntimeError("Could not locate repo root for EDMG Core installer.")
 
 
-def _installer_path() -> Path:
-    return _repo_root() / "scripts" / "edmg_installer.py"
+def _installer_path() -> Path | None:
+    root = _find_repo_root()
+    if root is None:
+        return None
+    return root / "scripts" / "edmg_installer.py"
 
 
 def _core_cache_root(data_dir: Path) -> Path:
@@ -32,24 +48,33 @@ def _try_import_template() -> tuple[bool, Any | None, str | None]:
 
 def core_status() -> dict[str, Any]:
     installer = _installer_path()
+    repo_root = installer.parent.parent if installer is not None else None
+    installable = bool(installer and installer.exists())
     try:
         import enhanced_deforum_music_generator  # type: ignore
         ver = getattr(enhanced_deforum_music_generator, "__version__", None)
         return {
             "available": True,
             "version": ver or "unknown",
-            "installable": installer.exists(),
-            "installer_path": str(installer),
-            "repo_root": str(_repo_root()),
+            "bundled": True,
+            "installable": installable,
+            "installer_path": str(installer) if installer is not None else None,
+            "repo_root": str(repo_root) if repo_root is not None else None,
         }
     except Exception as e:
+        hint = (
+            "Studio backend installs should bundle EDMG Core by default. Use Studio Setup to repair or reinstall it if this environment is missing Core."
+            if installable
+            else "This packaged Studio build cannot self-repair EDMG Core because the repo installer is not bundled. Reinstall or rebuild Studio if Core is missing."
+        )
         return {
             "available": False,
             "error": str(e),
-            "installable": installer.exists(),
-            "installer_path": str(installer),
-            "repo_root": str(_repo_root()),
-            "hint": "Studio backend installs should bundle EDMG Core by default. Use Studio Setup to repair or reinstall it if this environment is missing Core.",
+            "bundled": False,
+            "installable": installable,
+            "installer_path": str(installer) if installer is not None else None,
+            "repo_root": str(repo_root) if repo_root is not None else None,
+            "hint": hint,
         }
 
 def selfcheck() -> dict[str, Any]:
@@ -79,8 +104,8 @@ def deforum_template() -> dict[str, Any]:
 
 def install_core(task: Any, data_dir: Path, *, mode: str = "standard", backend: str = "cpu") -> None:
     installer = _installer_path()
-    if not installer.exists():
-        raise RuntimeError(f"EDMG Core installer not found: {installer}")
+    if installer is None or not installer.exists():
+        raise RuntimeError("EDMG Core repair installer is not available in this packaged Studio build.")
 
     cache_root = _core_cache_root(data_dir)
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -108,7 +133,7 @@ def install_core(task: Any, data_dir: Path, *, mode: str = "standard", backend: 
     task.last_log = "Installing or repairing EDMG Core inside the Studio backend environment…"
     proc = subprocess.Popen(
         cmd,
-        cwd=str(_repo_root()),
+        cwd=str(installer.parent.parent),
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

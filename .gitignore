@@ -42,6 +42,7 @@ install_profiles/
 models_store/
 outputs/
 cache/
+data/
 *_REPORT.md
 PATCH_*.txt
 TEST_REPORT.json
@@ -66,12 +67,14 @@ node_modules/
 studio/edmg-studio/dist/
 studio/edmg-studio/dist-sim/
 studio/edmg-studio/release/
+studio/edmg-studio/.cache/
 studio/edmg-studio/tmp/
 studio/edmg-studio/data/
 studio/edmg-studio/_legacy_migrations/
 studio/edmg-studio/launcher_env.json
 studio/edmg-studio/electron/
 studio/edmg-studio/electron-resources/backend/*.exe
+studio/edmg-studio/electron-resources/backend/backend-bundle-manifest.json
 studio/edmg-studio/electron-resources/bin/*.exe
 
 # ----------------------------

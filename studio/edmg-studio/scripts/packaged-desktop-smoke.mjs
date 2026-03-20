@@ -45,6 +45,7 @@ import { assertDesktopArtifacts, stageDesktopRelease } from './release-stage-lib
 function bundledResourcePaths(appDir) {
   return {
     backendExe: path.join(appDir, "electron-resources", "backend", process.platform === "win32" ? "edmg-studio-backend.exe" : "edmg-studio-backend"),
+    backendManifest: path.join(appDir, "electron-resources", "backend", "backend-bundle-manifest.json"),
     ffmpegExe: path.join(appDir, "electron-resources", "bin", process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg"),
   };
 }
@@ -139,8 +140,13 @@ async function runStagedAppProbe() {
   assert.ok(fs.existsSync(distIndex), "staged app dist/index.html missing");
   assert.ok(fs.existsSync(path.join(appDir, 'electron-builder.yml')), 'staged app electron-builder.yml missing');
   assert.ok(fs.existsSync(resources.backendExe), `staged app missing bundled backend: ${resources.backendExe}`);
+  assert.ok(fs.existsSync(resources.backendManifest), `staged app missing backend bundle manifest: ${resources.backendManifest}`);
   assert.ok(fs.existsSync(resources.ffmpegExe), `staged app missing bundled ffmpeg: ${resources.ffmpegExe}`);
+  const backendManifest = JSON.parse(await fsp.readFile(resources.backendManifest, "utf8"));
+  assert.equal(typeof backendManifest.sourceHash, "string", "backend bundle manifest must include sourceHash");
+  assert.equal(typeof backendManifest.binarySha256, "string", "backend bundle manifest must include binarySha256");
   summary.resources = resources;
+  summary.backendManifest = backendManifest;
 
   if (!support.ok) {
     return summary;
