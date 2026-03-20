@@ -158,6 +158,7 @@ async function main() {
   try {
     const health = await waitForHealth(baseUrl);
     const status = await requestJson(`${baseUrl}/v1/setup/status`);
+    const config = await requestJson(`${baseUrl}/v1/config`);
     const created = await postJson(`${baseUrl}/v1/projects`, { name: "Packaged Customer Proof" });
     const projectId = created?.project?.id;
     assert.ok(projectId, "Project creation did not return an id");
@@ -198,11 +199,34 @@ async function main() {
     const outputs = await requestJson(`${baseUrl}/v1/projects/${projectId}/outputs`);
     const comfyOk = Boolean(status?.comfyui?.ok);
     const usesInternalPipeline = Boolean(run?.job?.id);
+    const expectedDataDir = path.join(studioHome, "data");
+    const expectedModelsDir = path.join(studioHome, "models");
+    const expectedExternalDir = path.join(studioHome, "external");
+    const expectedLogsDir = path.join(studioHome, "logs");
+    const expectedOllamaModelsDir = path.join(expectedModelsDir, "ollama");
     const summary = {
       ok: job.status === "succeeded",
       studioHome,
       baseUrl,
       health,
+      paths: {
+        studioHome: config?.studio_home ?? null,
+        dataDir: config?.data_dir ?? null,
+        modelsDir: config?.models_dir ?? null,
+        ollamaModelsDir: config?.ollama_models_dir ?? null,
+        logsDir: config?.logs_dir ?? null,
+        externalDir: config?.external_dir ?? null,
+        expectedDataDir,
+        expectedModelsDir,
+        expectedOllamaModelsDir,
+        expectedLogsDir,
+        expectedExternalDir,
+        dataDirExists: fs.existsSync(expectedDataDir),
+        modelsDirExists: fs.existsSync(expectedModelsDir),
+        ollamaModelsDirExists: fs.existsSync(expectedOllamaModelsDir),
+        logsDirExists: fs.existsSync(expectedLogsDir),
+        externalDirExists: fs.existsSync(expectedExternalDir),
+      },
       setupStatus: {
         backendBundleOk: status?.backend_bundle?.ok,
         ffmpegOk: status?.ffmpeg?.ok,
@@ -210,7 +234,11 @@ async function main() {
         edmgInstallable: status?.edmg?.installable,
         edmgRepoRoot: status?.edmg?.repo_root ?? null,
         sevenZipOk: status?.sevenzip?.ok,
+        sevenZipPath: status?.sevenzip?.path ?? null,
         ollamaOk: status?.ollama?.ok,
+        ollamaManagedModelsDir: status?.ollama?.managed_models_dir ?? null,
+        ollamaManagedLaunchScript: status?.ollama?.managed_launch_script ?? null,
+        ollamaLaunchAvailable: status?.ollama?.launch_available ?? null,
         comfyOk: status?.comfyui?.ok,
       },
       projectId,
@@ -260,6 +288,18 @@ async function main() {
     assert.equal(summary.setupStatus.backendBundleOk, true, "Packaged backend bundle should be available");
     assert.equal(summary.setupStatus.ffmpegOk, true, "Bundled FFmpeg should be available");
     assert.equal(summary.setupStatus.edmgAvailable, true, "Bundled EDMG Core should be available");
+    assert.equal(summary.paths.studioHome, studioHome, "Packaged config should report the requested Studio home");
+    assert.equal(summary.paths.dataDir, expectedDataDir, "Packaged config data_dir should live under Studio home");
+    assert.equal(summary.paths.modelsDir, expectedModelsDir, "Packaged config models_dir should live under Studio home");
+    assert.equal(summary.paths.ollamaModelsDir, expectedOllamaModelsDir, "Packaged config ollama_models_dir should live under Studio models");
+    assert.equal(summary.paths.logsDir, expectedLogsDir, "Packaged config logs_dir should live under Studio home");
+    assert.equal(summary.paths.externalDir, expectedExternalDir, "Packaged config external_dir should live under Studio home");
+    assert.equal(summary.setupStatus.ollamaManagedModelsDir, expectedOllamaModelsDir, "Setup status should expose the managed Ollama models root");
+    assert.equal(summary.paths.dataDirExists, true, "Packaged run should create the Studio data root");
+    assert.equal(summary.paths.modelsDirExists, true, "Packaged run should create the Studio models root");
+    assert.equal(summary.paths.ollamaModelsDirExists, true, "Packaged run should create the Studio Ollama models root");
+    assert.equal(summary.paths.logsDirExists, true, "Packaged run should create the Studio logs root");
+    assert.equal(summary.paths.externalDirExists, true, "Packaged run should create the Studio external root");
     assert.equal(summary.variantCount > 0, true, "Expected at least one planned variant");
     assert.equal(summary.trackCount > 0, true, "Expected timeline tracks after apply");
     assert.equal(summary.job.status, "succeeded", "Packaged render job should succeed");
