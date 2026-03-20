@@ -65,6 +65,18 @@ def _bootstrap_config_path() -> Path:
 def _derive_studio_home(data_dir: Path) -> Path:
     return data_dir.expanduser().resolve().parent
 
+def _default_storage_env(studio_home: Path, data_dir: Path | None = None) -> dict[str, str]:
+    home = studio_home.expanduser().resolve()
+    data = data_dir.expanduser().resolve() if data_dir is not None else (home / "data").resolve()
+    return {
+        "EDMG_STUDIO_HOME": str(home),
+        "EDMG_STUDIO_DATA_DIR": str(data),
+        "EDMG_STUDIO_MODELS_DIR": str((home / "models").resolve()),
+        "EDMG_STUDIO_CACHE_DIR": str((home / "cache").resolve()),
+        "EDMG_STUDIO_LOGS_DIR": str((home / "logs").resolve()),
+        "EDMG_STUDIO_EXTERNAL_DIR": str((home / "external").resolve()),
+    }
+
 def _persist_studio_location(*, studio_home: Path | None = None, data_dir: Path | None = None) -> tuple[Path, Path]:
     if studio_home is None and data_dir is None:
         raise ValueError("studio_home or data_dir is required")
@@ -80,14 +92,14 @@ def _persist_studio_location(*, studio_home: Path | None = None, data_dir: Path 
     if data_dir is None:
         data_dir = (studio_home / "data").resolve()
 
-    os.environ["EDMG_STUDIO_HOME"] = str(studio_home)
-    os.environ["EDMG_STUDIO_DATA_DIR"] = str(data_dir)
+    storage_env = _default_storage_env(studio_home, data_dir)
+    for key, value in storage_env.items():
+        os.environ[key] = value
 
     cfg = _read_json(LAUNCHER_ENV_PATH, default={})
     if not isinstance(cfg, dict):
         cfg = {}
-    cfg["EDMG_STUDIO_HOME"] = str(studio_home)
-    cfg["EDMG_STUDIO_DATA_DIR"] = str(data_dir)
+    cfg.update(storage_env)
     _write_json(LAUNCHER_ENV_PATH, cfg)
 
     bootstrap = _read_json(_bootstrap_config_path(), default={})
@@ -106,7 +118,9 @@ def _studio_path_set(studio_home: Path, data_dir: Path | None = None) -> dict[st
     return {
         "studioHome": str(home),
         "dataDir": str(data),
+        "modelsDir": str((home / "models").resolve()),
         "cacheRoot": str((home / "cache").resolve()),
+        "externalDir": str((home / "external").resolve()),
         "electronUserData": str(electron),
         "sessionData": str((electron / "session").resolve()),
         "logsDir": str((home / "logs").resolve()),
@@ -930,8 +944,7 @@ class Launcher(tk.Tk):
             cfg = {}
         cfg["EDMG_STUDIO_BACKEND_HOST"] = host
         cfg["EDMG_STUDIO_BACKEND_PORT"] = port
-        cfg["EDMG_STUDIO_DATA_DIR"] = os.environ.get("EDMG_STUDIO_DATA_DIR", str(_default_data_dir()))
-        cfg["EDMG_STUDIO_HOME"] = os.environ.get("EDMG_STUDIO_HOME", str(self.studio_home))
+        cfg.update(_default_storage_env(self.studio_home, self.data_dir))
         _write_json(LAUNCHER_ENV_PATH, cfg)
 
         self._log(f"Backend host/port set ({reason}): {host}:{port}")
@@ -1334,8 +1347,8 @@ class Launcher(tk.Tk):
 
             py = str(_venv_python(BACKEND_VENV))
             env = os.environ.copy()
-            env.setdefault("EDMG_STUDIO_HOME", str(self.studio_home))
-            env.setdefault("EDMG_STUDIO_DATA_DIR", str(self.data_dir))
+            for key, value in _default_storage_env(self.studio_home, self.data_dir).items():
+                env.setdefault(key, value)
             ffmpeg_path = _resolve_ffmpeg_path()
             env["EDMG_FFMPEG_PATH"] = ffmpeg_path
             self._log(f"Using FFmpeg: {ffmpeg_path}")
@@ -1448,8 +1461,8 @@ class Launcher(tk.Tk):
         env.setdefault("EDMG_STUDIO_SPAWN_BACKEND", "1")
         env.setdefault("EDMG_STUDIO_BACKEND_HOST", self.backend_host)
         env.setdefault("EDMG_STUDIO_BACKEND_PORT", str(self.backend_port))
-        env.setdefault("EDMG_STUDIO_HOME", str(self.studio_home))
-        env.setdefault("EDMG_STUDIO_DATA_DIR", str(self.data_dir))
+        for key, value in _default_storage_env(self.studio_home, self.data_dir).items():
+            env.setdefault(key, value)
 
         self.studio_log_path.parent.mkdir(parents=True, exist_ok=True)
         try:

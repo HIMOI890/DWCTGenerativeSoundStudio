@@ -41,9 +41,39 @@ def _default_ffmpeg_path() -> str:
 
     return "ffmpeg"
 
+
+def _resolve_path_env(primary: str, fallback: str) -> Path:
+    explicit = os.getenv(primary, "").strip()
+    value = explicit or fallback
+    return Path(value).expanduser().resolve()
+
+
+def _default_studio_home(data_dir: Path) -> Path:
+    explicit = os.getenv("EDMG_STUDIO_HOME", "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    return data_dir.parent.resolve()
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path = Path(os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve()
+    studio_home: Path = _default_studio_home(Path(os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve())
+    models_dir: Path = _resolve_path_env(
+        "EDMG_STUDIO_MODELS_DIR",
+        str((_default_studio_home(Path(os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve()) / "models").resolve()),
+    )
+    cache_dir: Path = _resolve_path_env(
+        "EDMG_STUDIO_CACHE_DIR",
+        str((_default_studio_home(Path(os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve()) / "cache").resolve()),
+    )
+    logs_dir: Path = _resolve_path_env(
+        "EDMG_STUDIO_LOGS_DIR",
+        str((_default_studio_home(Path(os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve()) / "logs").resolve()),
+    )
+    external_dir: Path = _resolve_path_env(
+        "EDMG_STUDIO_EXTERNAL_DIR",
+        str((_default_studio_home(Path(os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve()) / "external").resolve()),
+    )
 
     # AI mode:
     #  - local (default): run AI in-process using services/ai/edmg_ai_service and talk to Ollama/OpenAI-compat directly.

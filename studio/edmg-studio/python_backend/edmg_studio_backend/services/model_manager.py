@@ -103,8 +103,18 @@ class ModelTaskManager:
 # ------------------------------ manager ------------------------------
 
 class ModelManager:
-    def __init__(self, data_dir: Path, comfyui_url: str, ollama_url: str, secrets: SecretStore | None = None):
+    def __init__(
+        self,
+        data_dir: Path,
+        models_dir: Path,
+        external_dir: Path,
+        comfyui_url: str,
+        ollama_url: str,
+        secrets: SecretStore | None = None,
+    ):
         self.data_dir = data_dir
+        self.models_dir = models_dir
+        self.external_dir = external_dir
         self.comfyui_url = comfyui_url.rstrip("/")
         self.ollama_url = _ollama_base(ollama_url)
         self.secrets = secrets
@@ -213,7 +223,7 @@ class ModelManager:
 
     # ---- resolution ----
     def _internal_models_dir(self, folder: str) -> Path:
-        root = (self.data_dir / "models_internal" / folder).resolve()
+        root = (self.models_dir / "internal" / folder).resolve()
         root.mkdir(parents=True, exist_ok=True)
         return root
 
@@ -241,15 +251,16 @@ class ModelManager:
 
     # ---- resolution ----
     def _comfy_models_dir(self, folder: str) -> Path:
-        # Prefer ComfyUI Portable (installed via setup wizard)
-        if comfy_portable_installed(self.data_dir):
-            root = comfy_portable_root(self.data_dir) / "ComfyUI" / "models" / folder
-            root.mkdir(parents=True, exist_ok=True)
-            return root
-        # Otherwise, use local data dir as a staging area
-        root = (self.data_dir / "models" / folder).resolve()
+        root = (self.models_dir / folder).resolve()
         root.mkdir(parents=True, exist_ok=True)
         return root
+
+    def _legacy_comfy_models_dir(self, folder: str) -> Path | None:
+        if comfy_portable_installed(self.external_dir, self.data_dir):
+            root = comfy_portable_root(self.external_dir, self.data_dir) / "ComfyUI" / "models" / folder
+            if root.exists():
+                return root.resolve()
+        return None
 
     def _installed_map(self, entries: list[dict[str, Any]]) -> dict[str, bool]:
         out: dict[str, bool] = {}
@@ -277,7 +288,9 @@ class ModelManager:
                 target = (e.get("target") or {})
                 folder = (target.get("folder") if isinstance(target, dict) else None) or "checkpoints"
                 if fname:
-                    out[mid] = (self._comfy_models_dir(folder) / fname).exists()
+                    primary = self._comfy_models_dir(folder) / fname
+                    legacy_root = self._legacy_comfy_models_dir(folder)
+                    out[mid] = primary.exists() or bool(legacy_root and (legacy_root / fname).exists())
                 else:
                     out[mid] = False
         return out

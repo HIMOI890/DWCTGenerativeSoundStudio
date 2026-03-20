@@ -242,32 +242,55 @@ def _pick_portable_asset(assets: list[dict[str, Any]], flavor: str) -> dict[str,
     return candidates[0]
 
 
-def comfy_portable_root(data_dir: Path) -> Path:
-    return (data_dir / "third_party" / "ComfyUI_windows_portable").resolve()
+def _legacy_external_root(data_dir: Path | None) -> Path | None:
+    if data_dir is None:
+        return None
+    return (data_dir / "third_party").resolve()
 
 
-def comfy_portable_installed(data_dir: Path) -> bool:
-    root = comfy_portable_root(data_dir)
+def comfy_portable_root(external_dir: Path, data_dir: Path | None = None) -> Path:
+    preferred = (external_dir / "ComfyUI_windows_portable").resolve()
+    if (preferred / "ComfyUI").exists() and (preferred / "python_embeded").exists():
+        return preferred
+
+    legacy_root = _legacy_external_root(data_dir)
+    if legacy_root is not None:
+        legacy = (legacy_root / "ComfyUI_windows_portable").resolve()
+        if (legacy / "ComfyUI").exists() and (legacy / "python_embeded").exists():
+            return legacy
+
+    return preferred
+
+
+def comfy_portable_installed(external_dir: Path, data_dir: Path | None = None) -> bool:
+    root = comfy_portable_root(external_dir, data_dir)
     return (root / "ComfyUI").exists() and (root / "python_embeded").exists()
 
 
 
-def _find_7z_exe(data_dir: Path) -> str:
+def _find_7z_exe(external_dir: Path, data_dir: Path | None = None) -> str:
     """Locate a 7-Zip CLI that supports BCJ2 (required for some .7z archives).
 
     Resolution order:
     1) EDMG_7Z_PATH env var
-    2) bundled alongside Studio data dir (third_party/bin/7z.exe)
-    3) common system install paths
-    4) PATH
+    2) bundled inside the Studio external-tools root (external/bin/7z.exe)
+    3) legacy bundled path alongside the Studio data dir (data/third_party/bin/7z.exe)
+    4) common system install paths
+    5) PATH
     """
     env = os.environ.get("EDMG_7Z_PATH")
     if env and Path(env).exists():
         return env
 
-    bundled = (data_dir / "third_party" / "bin" / ("7z.exe" if platform.system() == "Windows" else "7zz")).resolve()
+    bundled = (external_dir / "bin" / ("7z.exe" if platform.system() == "Windows" else "7zz")).resolve()
     if bundled.exists():
         return str(bundled)
+
+    legacy_root = _legacy_external_root(data_dir)
+    if legacy_root is not None:
+        legacy_bundled = (legacy_root / "bin" / ("7z.exe" if platform.system() == "Windows" else "7zz")).resolve()
+        if legacy_bundled.exists():
+            return str(legacy_bundled)
 
     candidates = []
     if platform.system() == "Windows":
@@ -286,8 +309,8 @@ def _find_7z_exe(data_dir: Path) -> str:
     raise RuntimeError("7-Zip CLI not found. Install 7-Zip or bundle 7z.exe and/or set EDMG_7Z_PATH.")
 
 
-def _extract_7z_cli(task: SetupTask, data_dir: Path, archive: Path, out_parent: Path) -> None:
-    seven = _find_7z_exe(data_dir)
+def _extract_7z_cli(task: SetupTask, external_dir: Path, archive: Path, out_parent: Path, data_dir: Path | None = None) -> None:
+    seven = _find_7z_exe(external_dir, data_dir)
     SetupTaskManager.log(task, f"Using 7-Zip: {seven}")
     out_parent.mkdir(parents=True, exist_ok=True)
     # `x` preserves folders; `-y` assumes Yes on all queries.
@@ -296,7 +319,41 @@ def _extract_7z_cli(task: SetupTask, data_dir: Path, archive: Path, out_parent: 
     subprocess.check_call(cmd)
 
 
-def download_and_extract_portable(task: SetupTask, data_dir: Path, flavor: str) -> Path:
+def _yaml_quote(value: str) -> str:
+    return "'" + str(value).replace("\\", "/").replace("'", "''") + "'"
+
+
+def ensure_comfyui_model_paths(external_dir: Path, models_dir: Path, data_dir: Path | None = None) -> Path | None:
+    root = comfy_portable_root(external_dir, data_dir)
+    if not (root / "ComfyUI").exists():
+        return None
+
+    yaml_path = root / "ComfyUI" / "extra_model_paths.yaml"
+    base_path = _yaml_quote(str(models_dir.resolve()))
+    content = (
+        "edmg_studio:\n"
+        f"  base_path: {base_path}\n"
+        "  checkpoints: checkpoints\n"
+        "  loras: loras\n"
+        "  embeddings: embeddings\n"
+        "  vae: vae\n"
+        "  controlnet: controlnet\n"
+        "  upscale_models: upscale_models\n"
+        "  clip: clip\n"
+        "  clip_vision: clip_vision\n"
+    )
+    yaml_path.parent.mkdir(parents=True, exist_ok=True)
+    yaml_path.write_text(content, encoding="utf-8")
+    return yaml_path
+
+
+def download_and_extract_portable(
+    task: SetupTask,
+    external_dir: Path,
+    flavor: str,
+    data_dir: Path | None = None,
+    models_dir: Path | None = None,
+) -> Path:
 
     assets = _github_latest_assets(COMFY_REPO)
     asset = _pick_portable_asset(assets, flavor)
@@ -306,8 +363,8 @@ def download_and_extract_portable(task: SetupTask, data_dir: Path, flavor: str) 
     if not url or not name:
         raise RuntimeError("Portable download URL not found.")
 
-    dest_root = comfy_portable_root(data_dir)
-    tmp_dir = (data_dir / "third_party" / "_downloads").resolve()
+    dest_root = (external_dir / "ComfyUI_windows_portable").resolve()
+    tmp_dir = (external_dir / "_downloads").resolve()
     tmp_dir.mkdir(parents=True, exist_ok=True)
     archive = tmp_dir / name
 
@@ -340,7 +397,7 @@ def download_and_extract_portable(task: SetupTask, data_dir: Path, flavor: str) 
     dest_root.parent.mkdir(parents=True, exist_ok=True)
 
     if str(archive).lower().endswith(".7z"):
-        _extract_7z_cli(task, data_dir, archive, dest_root.parent)
+        _extract_7z_cli(task, external_dir, archive, dest_root.parent, data_dir)
     else:
         import zipfile
 
@@ -364,8 +421,13 @@ def download_and_extract_portable(task: SetupTask, data_dir: Path, flavor: str) 
             pass
         found.rename(dest_root)
 
-    if not comfy_portable_installed(data_dir):
+    if not comfy_portable_installed(external_dir, data_dir):
         raise RuntimeError("ComfyUI Portable extraction completed, but expected folders were not found.")
+
+    if models_dir is not None:
+        yaml_path = ensure_comfyui_model_paths(external_dir, models_dir, data_dir)
+        if yaml_path is not None:
+            SetupTaskManager.log(task, f"Configured external model paths: {yaml_path}")
 
     SetupTaskManager.set_progress(task, 1.0)
     SetupTaskManager.log(task, "ComfyUI Portable installed.")
@@ -380,18 +442,30 @@ class ComfyPortableProcess:
     def running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
-    def start(self, task: SetupTask, data_dir: Path, flavor: str, host: str = "127.0.0.1", port: int = 8188) -> None:
+    def start(
+        self,
+        task: SetupTask,
+        external_dir: Path,
+        flavor: str,
+        host: str = "127.0.0.1",
+        port: int = 8188,
+        data_dir: Path | None = None,
+        models_dir: Path | None = None,
+    ) -> None:
         if platform.system().lower() != "windows":
             raise RuntimeError("ComfyUI Portable auto-start is currently implemented for Windows.")
 
-        if not comfy_portable_installed(data_dir):
+        if not comfy_portable_installed(external_dir, data_dir):
             raise RuntimeError("ComfyUI Portable is not installed yet. Click Install first.")
 
-        root = comfy_portable_root(data_dir)
+        root = comfy_portable_root(external_dir, data_dir)
         py = root / "python_embeded" / "python.exe"
         main = root / "ComfyUI" / "main.py"
         if not py.exists() or not main.exists():
             raise RuntimeError("ComfyUI Portable install looks incomplete.")
+
+        if models_dir is not None:
+            ensure_comfyui_model_paths(external_dir, models_dir, data_dir)
 
         if self.running():
             SetupTaskManager.log(task, "ComfyUI is already running.")
@@ -549,7 +623,7 @@ def install_backend_bundle(task: SetupTask, bundle: str = "studio_bundle") -> No
     SetupTaskManager.log(task, f"Backend runtime bundle `{bundle}` is ready.")
 
 
-def download_and_install_7zip(task: SetupTask, data_dir: Path) -> None:
+def download_and_install_7zip(task: SetupTask, external_dir: Path, data_dir: Path | None = None) -> None:
     """Install 7-Zip on Windows (official source: 7-zip.org). 
     Uses installer EXE. No-op if 7z is already available.
     """
@@ -558,13 +632,13 @@ def download_and_install_7zip(task: SetupTask, data_dir: Path) -> None:
         return
 
     try:
-        existing = _find_7z_exe(data_dir)
+        existing = _find_7z_exe(external_dir, data_dir)
         SetupTaskManager.log(task, f"7-Zip already available at: {existing}")
         return
     except Exception:
         pass
 
-    dest_dir = (data_dir / "third_party" / "_installers").resolve()
+    dest_dir = (external_dir / "_installers").resolve()
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     # Fetch official download page and pick the x64 .exe link.
@@ -607,6 +681,6 @@ def download_and_install_7zip(task: SetupTask, data_dir: Path) -> None:
     subprocess.check_call([str(installer), "/S"], cwd=str(dest_dir))
 
     # Verify installation
-    seven = _find_7z_exe(data_dir)
+    seven = _find_7z_exe(external_dir, data_dir)
     task.progress = 1.0
     SetupTaskManager.log(task, f"7-Zip installed successfully: {seven}")

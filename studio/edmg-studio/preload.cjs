@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld("edmg", {
   getStudioPaths: () => ipcRenderer.invoke("edmg:getStudioPaths"),
   getAiSettings: () => ipcRenderer.invoke("edmg:getAiSettings"),
   setStudioHome: (targetPath) => ipcRenderer.invoke("edmg:setStudioHome", targetPath),
+  setStorageSettings: (settings) => ipcRenderer.invoke("edmg:setStorageSettings", settings),
   setAiSettings: (settings) => ipcRenderer.invoke("edmg:setAiSettings", settings),
   relaunch: () => ipcRenderer.invoke("edmg:relaunch"),
 });

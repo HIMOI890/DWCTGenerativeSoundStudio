@@ -1,6 +1,24 @@
 import React, { useEffect, useState } from "react";
 import { apiGet, apiPost } from "../components/api";
 
+type StorageDraft = {
+  studioHome: string;
+  dataDir: string;
+  modelsDir: string;
+  cacheRoot: string;
+  logsDir: string;
+  externalDir: string;
+};
+
+const EMPTY_STORAGE_DRAFT: StorageDraft = {
+  studioHome: "",
+  dataDir: "",
+  modelsDir: "",
+  cacheRoot: "",
+  logsDir: "",
+  externalDir: "",
+};
+
 function Badge({ ok, label }: { ok: boolean; label: string }) {
   return (
     <span
@@ -25,7 +43,7 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
   const [modelsCatalog, setModelsCatalog] = useState<any>(null);
   const [edmgVerifyResult, setEdmgVerifyResult] = useState<any>(null);
   const [studioPaths, setStudioPaths] = useState<any>(null);
-  const [studioHomeInput, setStudioHomeInput] = useState<string>("");
+  const [storageDraft, setStorageDraft] = useState<StorageDraft>(EMPTY_STORAGE_DRAFT);
   const [packAccept, setPackAccept] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<string>("");
   const [err, setErr] = useState<string>("");
@@ -41,7 +59,14 @@ export default function Setup({ onNavigate }: { onNavigate?: (p: any) => void })
         const paths = await window.edmg.getStudioPaths();
         if (paths?.ok) {
           setStudioPaths(paths);
-          setStudioHomeInput((current) => current || String(paths.studioHome ?? ""));
+          setStorageDraft((current) => ({
+            studioHome: current.studioHome || String(paths.studioHome ?? ""),
+            dataDir: current.dataDir || String(paths.dataDir ?? ""),
+            modelsDir: current.modelsDir || String(paths.modelsDir ?? ""),
+            cacheRoot: current.cacheRoot || String(paths.cacheRoot ?? ""),
+            logsDir: current.logsDir || String(paths.logsDir ?? ""),
+            externalDir: current.externalDir || String(paths.externalDir ?? ""),
+          }));
         }
       }
     } catch (e: any) {
@@ -80,43 +105,98 @@ async function run(action: string, path: string, body: any = {}) {
   const modelRequired = !!aiConfig?.model_required;
   const fullSetupReady = backendBundleOk && sevenOk && comfyOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
 
-  async function browseStudioHome() {
+  function deriveStorageLayout(studioHome: string): StorageDraft {
+    const home = String(studioHome || "").trim();
+    if (!home) {
+      return {
+        ...EMPTY_STORAGE_DRAFT,
+        studioHome: "",
+      };
+    }
+    return {
+      studioHome: home,
+      dataDir: `${home}\\data`,
+      modelsDir: `${home}\\models`,
+      cacheRoot: `${home}\\cache`,
+      logsDir: `${home}\\logs`,
+      externalDir: `${home}\\external`,
+    };
+  }
+
+  function updateStorageDraft(patch: Partial<StorageDraft>) {
+    setStorageDraft((current) => {
+      const next = { ...current, ...patch };
+      if (patch.studioHome != null) {
+        const previousDefaults = deriveStorageLayout(current.studioHome || studioPaths?.studioHome || "");
+        const nextDefaults = deriveStorageLayout(next.studioHome || "");
+        const overrides = studioPaths?.storageOverrides ?? {};
+        (["dataDir", "modelsDir", "cacheRoot", "logsDir", "externalDir"] as Array<keyof StorageDraft>).forEach((key) => {
+          if (patch[key] != null) return;
+          const currentValue = String(current[key] || "");
+          const wasDefault = !overrides?.[key] || currentValue === previousDefaults[key];
+          if (wasDefault) {
+            next[key] = nextDefaults[key];
+          }
+        });
+      }
+      return next;
+    });
+  }
+
+  async function browseStoragePath(field: keyof StorageDraft, label: string) {
     try {
       const picked = await window.edmg?.pickDirectory?.({
-        title: "Select Studio Home",
-        defaultPath: studioHomeInput || studioPaths?.studioHome || undefined,
+        title: `Select ${label}`,
+        defaultPath: storageDraft[field] || studioPaths?.[field] || undefined,
       });
       if (picked?.ok && picked.path) {
-        setStudioHomeInput(String(picked.path));
+        updateStorageDraft({ [field]: String(picked.path) } as Partial<StorageDraft>);
       }
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     }
   }
 
-  async function applyStudioHome() {
-    const target = (studioHomeInput || "").trim();
+  async function applyStorageSettings() {
+    const target = (storageDraft.studioHome || "").trim();
     if (!target) {
       setErr("Pick a Studio Home folder first.");
       return;
     }
-    if (!window.edmg?.setStudioHome) {
-      setErr("Studio Home changes are only available in the desktop app build.");
+    if (!window.edmg?.setStorageSettings && !window.edmg?.setStudioHome) {
+      setErr("Storage layout changes are only available in the desktop app build.");
       return;
     }
 
-    setBusy("studio_home");
+    setBusy("storage_settings");
     setErr("");
     try {
-      const result = await window.edmg.setStudioHome(target);
+      const payload = {
+        studioHome: target,
+        dataDir: (storageDraft.dataDir || "").trim(),
+        modelsDir: (storageDraft.modelsDir || "").trim(),
+        cacheRoot: (storageDraft.cacheRoot || "").trim(),
+        logsDir: (storageDraft.logsDir || "").trim(),
+        externalDir: (storageDraft.externalDir || "").trim(),
+      };
+      const result = window.edmg?.setStorageSettings
+        ? await window.edmg.setStorageSettings(payload)
+        : await window.edmg?.setStudioHome?.(target);
       if (!result?.ok) {
-        throw new Error(result?.error || "Failed to save Studio Home.");
+        throw new Error(result?.error || "Failed to save storage settings.");
       }
       setStudioPaths((prev: any) => ({ ...(prev || {}), ...result, source: "configured (restart pending)" }));
-      setStudioHomeInput(String(result.studioHome || target));
+      setStorageDraft({
+        studioHome: String(result.studioHome || target),
+        dataDir: String(result.dataDir || payload.dataDir || ""),
+        modelsDir: String(result.modelsDir || payload.modelsDir || ""),
+        cacheRoot: String(result.cacheRoot || payload.cacheRoot || ""),
+        logsDir: String(result.logsDir || payload.logsDir || ""),
+        externalDir: String(result.externalDir || payload.externalDir || ""),
+      });
       const confirmMsg = result?.migrationPlanned
-        ? `Studio Home saved.\n\n${result?.migrationSummary || "Existing Studio data will be moved into the new home on restart."}\n\nRestart EDMG Studio now?`
-        : "Studio Home saved. Restart EDMG Studio now so new downloads, projects, and caches start using that folder?";
+        ? `Storage layout saved.\n\n${result?.migrationSummary || "Existing Studio data will be moved into the new locations on restart."}\n\nRestart EDMG Studio now?`
+        : "Storage layout saved. Restart EDMG Studio now so new downloads, projects, models, caches, and logs start using those folders?";
       if (window.confirm(confirmMsg)) {
         await window.edmg?.relaunch?.();
       }
@@ -126,6 +206,15 @@ async function run(action: string, path: string, body: any = {}) {
       setBusy("");
     }
   }
+
+  const storageOverrides = studioPaths?.storageOverrides ?? {};
+  const storageCustomLabels = [
+    storageOverrides?.dataDir ? "project data" : null,
+    storageOverrides?.modelsDir ? "models" : null,
+    storageOverrides?.cacheRoot ? "cache" : null,
+    storageOverrides?.logsDir ? "logs" : null,
+    storageOverrides?.externalDir ? "external tools" : null,
+  ].filter(Boolean);
 
   async function verifyEdmgCore() {
     setBusy("verify_edmg");
@@ -189,21 +278,49 @@ async function run(action: string, path: string, body: any = {}) {
         <div className="card">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div style={{ fontWeight: 800 }}>Storage Location</div>
-            <Badge ok={!!studioPaths?.studioHome} label={studioPaths?.studioHome ? "Configured" : "Default"} />
+            <Badge
+              ok={!!studioPaths?.studioHome}
+              label={storageCustomLabels.length ? `Custom (${storageCustomLabels.length})` : (studioPaths?.studioHome ? "Configured" : "Default")}
+            />
           </div>
           <div className="small" style={{ marginTop: 6 }}>
-            Set this before running Full Setup if you want Studio projects, ComfyUI Portable, model downloads, Electron data, and caches to live on <code>D:\...</code> instead of the default app-data location on <code>C:\</code>.
+            Set this before running Full Setup if you want Studio projects, model downloads, caches, logs, and external tools like ComfyUI Portable to stay on <code>D:\...</code> instead of silently filling <code>C:\</code>.
           </div>
+          {storageCustomLabels.length ? (
+            <div className="small" style={{ marginTop: 8, opacity: 0.84 }}>
+              Custom roots active for <b>{storageCustomLabels.join(", ")}</b>.
+            </div>
+          ) : null}
           <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-            <input
-              value={studioHomeInput}
-              onChange={(e) => setStudioHomeInput(e.target.value)}
-              placeholder="D:\\EDMG-Studio"
-            />
+            {[
+              { key: "studioHome", label: "Studio home", placeholder: "D:\\EDMG-Studio" },
+              { key: "dataDir", label: "Project data", placeholder: "D:\\EDMG-Studio\\data" },
+              { key: "modelsDir", label: "Models", placeholder: "D:\\EDMG-Studio\\models" },
+              { key: "cacheRoot", label: "Shared cache", placeholder: "D:\\EDMG-Studio\\cache" },
+              { key: "logsDir", label: "Logs", placeholder: "D:\\EDMG-Studio\\logs" },
+              { key: "externalDir", label: "External tools", placeholder: "D:\\EDMG-Studio\\external" },
+            ].map((field) => (
+              <div key={field.key} style={{ display: "grid", gridTemplateColumns: "140px 1fr auto", gap: 8, alignItems: "center" }}>
+                <div className="small" style={{ fontWeight: 800 }}>{field.label}</div>
+                <input
+                  value={String(storageDraft[field.key as keyof StorageDraft] ?? "")}
+                  onChange={(e) => updateStorageDraft({ [field.key]: e.target.value } as Partial<StorageDraft>)}
+                  placeholder={field.placeholder}
+                />
+                <button className="secondary" onClick={() => browseStoragePath(field.key as keyof StorageDraft, field.label)}>
+                  Browse…
+                </button>
+              </div>
+            ))}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button className="secondary" onClick={browseStudioHome}>Browse…</button>
-              <button disabled={busy === "studio_home"} onClick={applyStudioHome}>
-                {busy === "studio_home" ? "Saving…" : "Save & Restart"}
+              <button
+                className="secondary"
+                onClick={() => setStorageDraft(deriveStorageLayout(storageDraft.studioHome || studioPaths?.studioHome || ""))}
+              >
+                Use Studio Home Defaults
+              </button>
+              <button disabled={busy === "storage_settings"} onClick={applyStorageSettings}>
+                {busy === "storage_settings" ? "Saving…" : "Save & Restart"}
               </button>
               <button
                 className="secondary"
@@ -217,7 +334,10 @@ async function run(action: string, path: string, body: any = {}) {
               <div className="small" style={{ display: "grid", gap: 4, opacity: 0.88 }}>
                 <div>Studio home: <code>{studioPaths.studioHome}</code></div>
                 <div>Project data: <code>{studioPaths.dataDir}</code></div>
+                <div>Models: <code>{studioPaths.modelsDir}</code></div>
                 <div>Shared cache: <code>{studioPaths.cacheRoot}</code></div>
+                <div>External tools: <code>{studioPaths.externalDir}</code></div>
+                <div>Logs: <code>{studioPaths.logsDir}</code></div>
                 <div>Electron data: <code>{studioPaths.electronUserData}</code></div>
                 {studioPaths?.pendingMigration?.source?.studioHome ? (
                   <div style={{ color: "#ffd78c" }}>

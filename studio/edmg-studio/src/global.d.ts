@@ -15,14 +15,24 @@ declare global {
         ok: boolean;
         studioHome: string;
         dataDir: string;
+        modelsDir: string;
         cacheRoot: string;
+        externalDir: string;
         electronUserData: string;
         sessionData: string;
         logsDir: string;
+        storageOverrides?: {
+          dataDir?: string;
+          modelsDir?: string;
+          cacheRoot?: string;
+          logsDir?: string;
+          externalDir?: string;
+        };
         bootstrapConfigPath: string;
         pendingMigration?: any;
         lastMigration?: any;
         source: string;
+        storageSource?: string;
       }>;
       getAiSettings?: () => Promise<{
         ok: boolean;
@@ -43,7 +53,30 @@ declare global {
         migrationSummary?: string;
         studioHome?: string;
         dataDir?: string;
+        modelsDir?: string;
         cacheRoot?: string;
+        logsDir?: string;
+        externalDir?: string;
+      }>;
+      setStorageSettings?: (settings: {
+        studioHome: string;
+        dataDir?: string;
+        modelsDir?: string;
+        cacheRoot?: string;
+        logsDir?: string;
+        externalDir?: string;
+      }) => Promise<{
+        ok: boolean;
+        error?: string;
+        restartRequired?: boolean;
+        migrationPlanned?: boolean;
+        migrationSummary?: string;
+        studioHome?: string;
+        dataDir?: string;
+        modelsDir?: string;
+        cacheRoot?: string;
+        logsDir?: string;
+        externalDir?: string;
       }>;
       setAiSettings?: (settings: {
         mode: string;

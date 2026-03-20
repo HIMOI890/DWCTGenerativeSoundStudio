@@ -85,6 +85,10 @@ class JobCanceled(Exception):
 
 
 settings.data_dir.mkdir(parents=True, exist_ok=True)
+settings.models_dir.mkdir(parents=True, exist_ok=True)
+settings.cache_dir.mkdir(parents=True, exist_ok=True)
+settings.logs_dir.mkdir(parents=True, exist_ok=True)
+settings.external_dir.mkdir(parents=True, exist_ok=True)
 
 store = ProjectStore(settings.data_dir)
 jobs = JobStore(store.projects_dir)
@@ -100,6 +104,8 @@ setup_tasks = SetupTaskManager()
 secrets = SecretStore(settings.data_dir)
 models = ModelManager(
     settings.data_dir,
+    settings.models_dir,
+    settings.external_dir,
     settings.comfyui_url,
     os.getenv('EDMG_AI_OLLAMA_URL','http://127.0.0.1:11434'),
     secrets=secrets,
@@ -856,7 +862,12 @@ def hardware():
 @app.get("/v1/config")
 def get_config():
     return {
+        "studio_home": str(settings.studio_home),
         "data_dir": str(settings.data_dir),
+        "models_dir": str(settings.models_dir),
+        "cache_dir": str(settings.cache_dir),
+        "logs_dir": str(settings.logs_dir),
+        "external_dir": str(settings.external_dir),
         "ai_mode": settings.ai_mode,
         "ai_base_url": settings.ai_base_url,
         "ai_timeout_s": settings.ai_timeout_s,
@@ -997,7 +1008,7 @@ def setup_status():
             "url": settings.resolved_comfyui_urls()[0] if settings.resolved_comfyui_urls() else settings.comfyui_url,
             "checkpoint": settings.comfyui_checkpoint,
             "diagnose": diag,
-            "portable_installed": comfy_portable_installed(settings.data_dir),
+            "portable_installed": comfy_portable_installed(settings.external_dir, settings.data_dir),
             "hint": comfy_hint,
         }
     except Exception as e:
@@ -1005,7 +1016,7 @@ def setup_status():
             "ok": False,
             "url": settings.comfyui_url,
             "checkpoint": settings.comfyui_checkpoint,
-            "portable_installed": comfy_portable_installed(settings.data_dir),
+            "portable_installed": comfy_portable_installed(settings.external_dir, settings.data_dir),
             "error": str(e),
             "hint": "Configure EDMG_COMFYUI_URL to a running ComfyUI instance, or install ComfyUI Portable via this wizard.",
         }
@@ -1022,10 +1033,10 @@ def setup_status():
     
     # 7-Zip CLI (needed to extract some .7z archives, e.g., ComfyUI Portable BCJ2)
     try:
-        seven_path = _find_7z_exe(settings.data_dir)
+        seven_path = _find_7z_exe(settings.external_dir, settings.data_dir)
         seven = {"ok": True, "path": seven_path, "hint": None}
     except Exception as e:
-        seven = {"ok": False, "path": None, "hint": "Install 7-Zip (recommended) or set EDMG_7Z_PATH / bundle 7z.exe in data/third_party/bin."}
+        seven = {"ok": False, "path": None, "hint": "Install 7-Zip (recommended) or set EDMG_7Z_PATH / bundle 7z.exe in the Studio external tools folder."}
 
     return {
             "ok": True,
@@ -1042,7 +1053,7 @@ def setup_status():
 
 @app.post("/v1/setup/ollama/download_and_run")
 def setup_ollama_download_and_run():
-    dest = settings.data_dir / "third_party" / "_installers"
+    dest = settings.external_dir / "_installers"
     task = setup_tasks.start("download_ollama_installer", download_and_run_ollama_installer, dest)
     return {"ok": True, "task": task.__dict__}
 
@@ -1059,7 +1070,7 @@ def setup_ollama_pull(payload: dict[str, Any]):
 @app.post("/v1/setup/7zip/install")
 def setup_7zip_install():
     """Install 7-Zip on Windows (required for extracting some .7z archives)."""
-    task = setup_tasks.start("install_7zip", download_and_install_7zip, settings.data_dir)
+    task = setup_tasks.start("install_7zip", download_and_install_7zip, settings.external_dir, settings.data_dir)
     return {"ok": True, "task": task.__dict__}
 
 @app.post("/v1/setup/backend/install")
@@ -1089,15 +1100,15 @@ def setup_full_install(payload: dict[str, Any]):
 
         # 2) Ensure 7-Zip for .7z extraction
         try:
-            _find_7z_exe(settings.data_dir)
+            _find_7z_exe(settings.external_dir, settings.data_dir)
         except Exception:
-            download_and_install_7zip(task, settings.data_dir)
+            download_and_install_7zip(task, settings.external_dir, settings.data_dir)
 
         # 3) Ollama installer/model only when the active AI path actually uses Ollama.
         if ai_config.get("ollama_required"):
             ollama_status = check_ollama(ollama_url, model)
             if not ollama_status.get("ok"):
-                dest = settings.data_dir / "third_party" / "_installers"
+                dest = settings.external_dir / "_installers"
                 download_and_run_ollama_installer(task, dest)
             else:
                 SetupTaskManager.log(task, "Ollama is already reachable.")
@@ -1114,8 +1125,8 @@ def setup_full_install(payload: dict[str, Any]):
             )
 
         # 4) ComfyUI Portable install + start
-        if not comfy_portable_installed(settings.data_dir):
-            download_and_extract_portable(task, settings.data_dir, flavor)
+        if not comfy_portable_installed(settings.external_dir, settings.data_dir):
+            download_and_extract_portable(task, settings.external_dir, flavor, settings.data_dir, settings.models_dir)
         else:
             SetupTaskManager.log(task, "ComfyUI Portable is already installed.")
 
@@ -1129,7 +1140,7 @@ def setup_full_install(payload: dict[str, Any]):
         if comfy_ready:
             SetupTaskManager.log(task, "ComfyUI is already reachable.")
         else:
-            comfy_portable.start(task, settings.data_dir, flavor, "127.0.0.1", port)
+            comfy_portable.start(task, settings.external_dir, flavor, "127.0.0.1", port, settings.data_dir, settings.models_dir)
 
     task = setup_tasks.start(f"full_setup:{flavor}:{ai_config.get('provider')}", _run)
     return {"ok": True, "task": task.__dict__}
@@ -1138,7 +1149,14 @@ def setup_full_install(payload: dict[str, Any]):
 @app.post("/v1/setup/comfyui/portable/install")
 def setup_comfyui_portable_install(payload: dict[str, Any]):
     flavor = (payload or {}).get("flavor") or "cpu"
-    task = setup_tasks.start(f"install_comfyui_portable:{flavor}", download_and_extract_portable, settings.data_dir, flavor)
+    task = setup_tasks.start(
+        f"install_comfyui_portable:{flavor}",
+        download_and_extract_portable,
+        settings.external_dir,
+        flavor,
+        settings.data_dir,
+        settings.models_dir,
+    )
     return {"ok": True, "task": task.__dict__}
 
 
@@ -1146,7 +1164,16 @@ def setup_comfyui_portable_install(payload: dict[str, Any]):
 def setup_comfyui_portable_start(payload: dict[str, Any]):
     flavor = (payload or {}).get("flavor") or "cpu"
     port = int((payload or {}).get("port") or 8188)
-    task = setup_tasks.start(f"start_comfyui_portable:{flavor}", comfy_portable.start, settings.data_dir, flavor, "127.0.0.1", port)
+    task = setup_tasks.start(
+        f"start_comfyui_portable:{flavor}",
+        comfy_portable.start,
+        settings.external_dir,
+        flavor,
+        "127.0.0.1",
+        port,
+        settings.data_dir,
+        settings.models_dir,
+    )
     return {"ok": True, "task": task.__dict__}
 
 

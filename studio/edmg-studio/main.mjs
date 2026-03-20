@@ -62,6 +62,22 @@ const AI_LOCAL_PROVIDER_ALIASES = Object.freeze({
   none: "rule_based",
 });
 
+const STORAGE_SETTINGS_DEFAULT_DIRS = Object.freeze({
+  dataDir: "data",
+  modelsDir: "models",
+  cacheRoot: "cache",
+  logsDir: "logs",
+  externalDir: "external",
+});
+
+const STORAGE_SETTINGS_ENV_KEYS = Object.freeze({
+  dataDir: "EDMG_STUDIO_DATA_DIR",
+  modelsDir: "EDMG_STUDIO_MODELS_DIR",
+  cacheRoot: "EDMG_STUDIO_CACHE_DIR",
+  logsDir: "EDMG_STUDIO_LOGS_DIR",
+  externalDir: "EDMG_STUDIO_EXTERNAL_DIR",
+});
+
 let currentBackendUrl = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 console.log(`EDMG_currentBackendUrl=${currentBackendUrl}`);
 
@@ -140,6 +156,95 @@ function pickConfiguredString(...values) {
     }
   }
   return "";
+}
+
+function getDefaultStoragePaths(studioHome) {
+  const resolvedHome = resolveConfiguredPath(studioHome);
+  if (!resolvedHome) {
+    const fallbackDataDir = path.join(app.getPath("userData"), "data");
+    const fallbackHome = path.dirname(fallbackDataDir);
+    return getDefaultStoragePaths(fallbackHome);
+  }
+
+  const electronUserData = path.join(resolvedHome, "electron");
+  return {
+    studioHome: resolvedHome,
+    dataDir: path.join(resolvedHome, STORAGE_SETTINGS_DEFAULT_DIRS.dataDir),
+    modelsDir: path.join(resolvedHome, STORAGE_SETTINGS_DEFAULT_DIRS.modelsDir),
+    cacheRoot: path.join(resolvedHome, STORAGE_SETTINGS_DEFAULT_DIRS.cacheRoot),
+    logsDir: path.join(resolvedHome, STORAGE_SETTINGS_DEFAULT_DIRS.logsDir),
+    externalDir: path.join(resolvedHome, STORAGE_SETTINGS_DEFAULT_DIRS.externalDir),
+    electronUserData,
+    sessionData: path.join(electronUserData, "session"),
+  };
+}
+
+function getRawStorageSettingsFromEnv(envLike) {
+  const env = envLike && typeof envLike === "object" ? envLike : {};
+  return {
+    dataDir: env[STORAGE_SETTINGS_ENV_KEYS.dataDir],
+    modelsDir: env[STORAGE_SETTINGS_ENV_KEYS.modelsDir],
+    cacheRoot: env[STORAGE_SETTINGS_ENV_KEYS.cacheRoot],
+    logsDir: env[STORAGE_SETTINGS_ENV_KEYS.logsDir],
+    externalDir: env[STORAGE_SETTINGS_ENV_KEYS.externalDir],
+  };
+}
+
+function readBootstrapStorageSettingsRaw() {
+  const bootstrapConfig = readBootstrapConfig();
+  if (bootstrapConfig?.storageSettings && typeof bootstrapConfig.storageSettings === "object") {
+    return bootstrapConfig.storageSettings;
+  }
+  return {};
+}
+
+function readLauncherStorageSettingsRaw() {
+  const launcherEnv = readLauncherEnv();
+  const launcherHome = resolveConfiguredPath(launcherEnv?.EDMG_STUDIO_HOME);
+  const raw = getRawStorageSettingsFromEnv(launcherEnv);
+  return launcherHome ? trimStorageOverrides(raw, launcherHome) : normalizeStorageOverrides(raw);
+}
+
+function hasAnyStorageSetting(rawSettings) {
+  return Object.values(rawSettings ?? {}).some((value) => typeof value === "string" && value.trim());
+}
+
+function normalizeStorageOverrides(rawSettings = {}) {
+  const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+  return {
+    dataDir: resolveConfiguredPath(current.dataDir),
+    modelsDir: resolveConfiguredPath(current.modelsDir),
+    cacheRoot: resolveConfiguredPath(current.cacheRoot),
+    logsDir: resolveConfiguredPath(current.logsDir),
+    externalDir: resolveConfiguredPath(current.externalDir),
+  };
+}
+
+function buildResolvedStudioPaths(studioHome, rawSettings = {}) {
+  const defaults = getDefaultStoragePaths(studioHome);
+  const overrides = normalizeStorageOverrides(rawSettings);
+  return {
+    studioHome: defaults.studioHome,
+    dataDir: overrides.dataDir || defaults.dataDir,
+    modelsDir: overrides.modelsDir || defaults.modelsDir,
+    cacheRoot: overrides.cacheRoot || defaults.cacheRoot,
+    logsDir: overrides.logsDir || defaults.logsDir,
+    externalDir: overrides.externalDir || defaults.externalDir,
+    electronUserData: defaults.electronUserData,
+    sessionData: defaults.sessionData,
+  };
+}
+
+function trimStorageOverrides(rawSettings = {}, studioHome = "") {
+  const defaults = getDefaultStoragePaths(studioHome || getConfiguredStudioHome() || path.dirname(getDefaultDataDir()));
+  const normalized = normalizeStorageOverrides(rawSettings);
+  const trimmed = {};
+  for (const [key, value] of Object.entries(normalized)) {
+    if (value && !samePath(value, defaults[key])) {
+      trimmed[key] = value;
+    }
+  }
+  return trimmed;
 }
 
 function getRawAiSettingsFromEnv(envLike) {
@@ -232,11 +337,17 @@ function getConfiguredDataDir(includeLauncher = true) {
   const explicitDataDir = resolveConfiguredPath(process.env.EDMG_STUDIO_DATA_DIR);
   if (explicitDataDir) return explicitDataDir;
 
+  const bootstrapDataDir = resolveConfiguredPath(readBootstrapStorageSettingsRaw()?.dataDir);
+  if (bootstrapDataDir) return bootstrapDataDir;
+
   const bootstrapConfig = readBootstrapConfig();
   const bootstrapHome = resolveConfiguredPath(bootstrapConfig?.studioHome);
   if (bootstrapHome) return path.join(bootstrapHome, "data");
 
   if (includeLauncher) {
+    const launcherStorage = readLauncherStorageSettingsRaw();
+    const launcherStorageDataDir = resolveConfiguredPath(launcherStorage?.dataDir);
+    if (launcherStorageDataDir) return launcherStorageDataDir;
     const launcherEnv = readLauncherEnv();
     const launcherHome = resolveConfiguredPath(launcherEnv?.EDMG_STUDIO_HOME);
     if (launcherHome) return path.join(launcherHome, "data");
@@ -267,29 +378,28 @@ function getConfiguredStudioHome() {
 
 const INITIAL_STUDIO_HOME = getConfiguredStudioHome();
 
-function applyStudioHomePaths(studioHome) {
-  if (!studioHome) return;
+function applyStudioStoragePaths(paths) {
+  if (!paths?.studioHome) return;
 
-  const electronRoot = path.join(studioHome, "electron");
-  ensureDirSync(electronRoot);
-  app.setPath("userData", electronRoot);
+  ensureDirSync(paths.electronUserData);
+  app.setPath("userData", paths.electronUserData);
 
   try {
-    const sessionDir = path.join(electronRoot, "session");
-    ensureDirSync(sessionDir);
-    app.setPath("sessionData", sessionDir);
+    ensureDirSync(paths.sessionData);
+    app.setPath("sessionData", paths.sessionData);
   } catch {}
 
   try {
-    const logsDir = path.join(studioHome, "logs");
-    ensureDirSync(logsDir);
-    app.setPath("logs", logsDir);
+    ensureDirSync(paths.logsDir);
+    app.setPath("logs", paths.logsDir);
   } catch {}
 }
 
-applyStudioHomePaths(INITIAL_STUDIO_HOME);
+if (INITIAL_STUDIO_HOME) {
+  applyStudioStoragePaths(getStudioPaths(INITIAL_STUDIO_HOME));
+}
 
-function getStudioPaths(studioHomeOverride = "") {
+function getStudioPaths(studioHomeOverride = "", storageOverrideValues = null) {
   const overrideHome = resolveConfiguredPath(studioHomeOverride);
   const configuredDataDir = getConfiguredDataDir();
   const configuredStudioHome = getConfiguredStudioHome();
@@ -298,41 +408,45 @@ function getStudioPaths(studioHomeOverride = "") {
     overrideHome ||
     configuredStudioHome ||
     path.dirname(configuredDataDir || getDefaultDataDir());
-  const dataDir = overrideHome ? path.join(resolvedHome, "data") : (configuredDataDir || path.join(resolvedHome, "data"));
-  const cacheRoot = path.join(resolvedHome, "cache");
-  const electronUserData = app.getPath("userData");
+  const launcherRaw = readLauncherStorageSettingsRaw();
+  const bootstrapRaw = readBootstrapStorageSettingsRaw();
+  const envRaw = trimStorageOverrides(getRawStorageSettingsFromEnv(process.env), resolvedHome);
+  const overrideRaw =
+    storageOverrideValues && typeof storageOverrideValues === "object" ? storageOverrideValues : {};
+  const mergedRaw = {
+    ...launcherRaw,
+    ...bootstrapRaw,
+    ...envRaw,
+    ...overrideRaw,
+  };
+  const paths = buildResolvedStudioPaths(resolvedHome, mergedRaw);
+
+  let storageSource = "default";
+  if (hasAnyStorageSetting(launcherRaw)) storageSource = "launcher";
+  if (hasAnyStorageSetting(bootstrapRaw)) storageSource = "bootstrap";
+  if (hasAnyStorageSetting(envRaw)) storageSource = "env";
+  if (hasAnyStorageSetting(overrideRaw)) storageSource = "override";
 
   return {
-    studioHome: resolvedHome,
-    dataDir,
-    cacheRoot,
-    electronUserData,
-    sessionData: (() => {
-      try {
-        return app.getPath("sessionData");
-      } catch {
-        return path.join(electronUserData, "session");
-      }
-    })(),
-    logsDir: (() => {
-      try {
-        return app.getPath("logs");
-      } catch {
-        return path.join(resolvedHome, "logs");
-      }
-    })(),
+    ...paths,
+    storageOverrides: trimStorageOverrides(mergedRaw, resolvedHome),
     bootstrapConfigPath: getBootstrapConfigPath(),
     pendingMigration: bootstrapConfig?.pendingMigration ?? null,
     lastMigration: bootstrapConfig?.lastMigration ?? null,
-    source: (overrideHome || configuredStudioHome || configuredDataDir) ? "configured" : "default",
+    source: (overrideHome || configuredStudioHome || configuredDataDir || storageSource !== "default") ? "configured" : "default",
+    storageSource,
   };
 }
 
-function buildManagedStudioEnv(studioHomeOverride = "") {
-  const paths = getStudioPaths(studioHomeOverride);
+function buildManagedStudioEnv(studioHomeOverride = "", storageOverrideValues = null) {
+  const paths = getStudioPaths(studioHomeOverride, storageOverrideValues);
   const managed = {
     EDMG_STUDIO_HOME: paths.studioHome,
     EDMG_STUDIO_DATA_DIR: paths.dataDir,
+    EDMG_STUDIO_MODELS_DIR: paths.modelsDir,
+    EDMG_STUDIO_CACHE_DIR: paths.cacheRoot,
+    EDMG_STUDIO_LOGS_DIR: paths.logsDir,
+    EDMG_STUDIO_EXTERNAL_DIR: paths.externalDir,
     PIP_CACHE_DIR: path.join(paths.cacheRoot, "pip"),
     XDG_CACHE_HOME: path.join(paths.cacheRoot, "xdg"),
     HF_HOME: path.join(paths.cacheRoot, "huggingface"),
@@ -353,6 +467,45 @@ function buildManagedStudioEnv(studioHomeOverride = "") {
   }
 
   return managed;
+}
+
+function syncStorageSettingsToProcessEnv(studioHome = "", storageOverrides = null) {
+  const paths = buildResolvedStudioPaths(
+    studioHome || getConfiguredStudioHome() || path.dirname(getDefaultDataDir()),
+    storageOverrides || {}
+  );
+  const managed = {
+    EDMG_STUDIO_HOME: paths.studioHome,
+    EDMG_STUDIO_DATA_DIR: paths.dataDir,
+    EDMG_STUDIO_MODELS_DIR: paths.modelsDir,
+    EDMG_STUDIO_CACHE_DIR: paths.cacheRoot,
+    EDMG_STUDIO_LOGS_DIR: paths.logsDir,
+    EDMG_STUDIO_EXTERNAL_DIR: paths.externalDir,
+    PIP_CACHE_DIR: path.join(paths.cacheRoot, "pip"),
+    XDG_CACHE_HOME: path.join(paths.cacheRoot, "xdg"),
+    HF_HOME: path.join(paths.cacheRoot, "huggingface"),
+    HUGGINGFACE_HUB_CACHE: path.join(paths.cacheRoot, "huggingface", "hub"),
+    TRANSFORMERS_CACHE: path.join(paths.cacheRoot, "transformers"),
+    TORCH_HOME: path.join(paths.cacheRoot, "torch"),
+    NLTK_DATA: path.join(paths.cacheRoot, "nltk_data"),
+    WHISPER_CACHE_DIR: path.join(paths.cacheRoot, "whisper"),
+    MPLCONFIGDIR: path.join(paths.cacheRoot, "matplotlib"),
+    TMP: path.join(paths.cacheRoot, "tmp"),
+    TEMP: path.join(paths.cacheRoot, "tmp"),
+  };
+  for (const [key, value] of Object.entries(managed)) {
+    ensureDirSync(value);
+    process.env[key] = value;
+  }
+  return {
+    ...paths,
+    storageOverrides: trimStorageOverrides(storageOverrides || {}, paths.studioHome),
+    bootstrapConfigPath: getBootstrapConfigPath(),
+    pendingMigration: readBootstrapConfig()?.pendingMigration ?? null,
+    lastMigration: readBootstrapConfig()?.lastMigration ?? null,
+    source: "configured",
+    storageSource: "override",
+  };
 }
 
 function buildManagedAiEnv() {
@@ -394,15 +547,17 @@ function selectStudioPathSet(paths) {
   return {
     studioHome: paths?.studioHome ?? "",
     dataDir: paths?.dataDir ?? "",
+    modelsDir: paths?.modelsDir ?? "",
     cacheRoot: paths?.cacheRoot ?? "",
     electronUserData: paths?.electronUserData ?? "",
     sessionData: paths?.sessionData ?? "",
     logsDir: paths?.logsDir ?? "",
+    externalDir: paths?.externalDir ?? "",
   };
 }
 
 function buildPendingMigration(sourcePaths, targetPaths) {
-  const keys = ["dataDir", "cacheRoot", "logsDir", "electronUserData"];
+  const keys = ["dataDir", "modelsDir", "cacheRoot", "logsDir", "externalDir", "electronUserData"];
   const changed = keys.some((key) => !samePath(sourcePaths?.[key], targetPaths?.[key]));
   if (!changed) return null;
 
@@ -417,12 +572,14 @@ function summarizePendingMigration(plan) {
   if (!plan?.source || !plan?.target) return "";
   const labels = [
     ["dataDir", "project data"],
+    ["modelsDir", "models"],
     ["cacheRoot", "cache"],
     ["logsDir", "logs"],
+    ["externalDir", "external tools"],
     ["electronUserData", "Electron data"],
   ].filter(([key]) => !samePath(plan.source?.[key], plan.target?.[key]));
   if (!labels.length) return "";
-  return `Existing ${labels.map(([, label]) => label).join(", ")} will migrate into the new Studio home on restart.`;
+  return `Existing ${labels.map(([, label]) => label).join(", ")} will migrate into the new storage layout on restart.`;
 }
 
 async function safeMergeCopy(src, dst) {
@@ -544,6 +701,12 @@ async function runPendingStudioMigrationIfNeeded() {
   }));
 
   results.push(await migrateDirectory({
+    sourcePath: plan.source.modelsDir,
+    targetPath: plan.target.modelsDir,
+    label: "models",
+  }));
+
+  results.push(await migrateDirectory({
     sourcePath: plan.source.cacheRoot,
     targetPath: plan.target.cacheRoot,
     label: "cache",
@@ -553,6 +716,12 @@ async function runPendingStudioMigrationIfNeeded() {
     sourcePath: plan.source.logsDir,
     targetPath: plan.target.logsDir,
     label: "logs",
+  }));
+
+  results.push(await migrateDirectory({
+    sourcePath: plan.source.externalDir,
+    targetPath: plan.target.externalDir,
+    label: "external_tools",
   }));
 
   if (!samePath(plan.source.electronUserData, bootstrapRoot)) {
@@ -599,7 +768,7 @@ function getDefaultDataDir() {
 
   const configuredStudioHome = getConfiguredStudioHome();
   if (configuredStudioHome) {
-    return path.join(configuredStudioHome, "data");
+    return getDefaultStoragePaths(configuredStudioHome).dataDir;
   }
 
   return path.join(app.getPath("userData"), "data");
@@ -728,8 +897,8 @@ async function startBackendIfNeeded() {
   }
 
   const spec = getBackendLaunchSpec();
-  const backendDataDir = getDefaultDataDir();
   const managedStudioEnv = buildManagedStudioEnv();
+  const backendDataDir = managedStudioEnv.EDMG_STUDIO_DATA_DIR;
   const ffmpegPath = resolveManagedFfmpegPath();
 
   if (app.isPackaged && !fs.existsSync(spec.command)) {
@@ -754,6 +923,8 @@ async function startBackendIfNeeded() {
     cwd: spec.cwd,
   });
   console.log("[backend] EDMG_STUDIO_DATA_DIR=", backendDataDir);
+  console.log("[backend] EDMG_STUDIO_MODELS_DIR=", managedStudioEnv.EDMG_STUDIO_MODELS_DIR);
+  console.log("[backend] EDMG_STUDIO_EXTERNAL_DIR=", managedStudioEnv.EDMG_STUDIO_EXTERNAL_DIR);
   console.log("[backend] EDMG_FFMPEG_PATH=", ffmpegPath);
 
   try {
@@ -767,7 +938,6 @@ async function startBackendIfNeeded() {
         ...buildManagedAiEnv(),
         EDMG_STUDIO_BACKEND_HOST: BACKEND_HOST,
         EDMG_STUDIO_BACKEND_PORT: String(BACKEND_PORT),
-        EDMG_STUDIO_DATA_DIR: backendDataDir,
         EDMG_FFMPEG_PATH: ffmpegPath,
       },
     });
@@ -904,21 +1074,29 @@ function registerIpcHandlers() {
   ipcMain.handle("edmg:getStudioPaths", async () => ({ ok: true, ...getStudioPaths() }));
   ipcMain.handle("edmg:getAiSettings", async () => ({ ok: true, ...getConfiguredAiSettings() }));
 
-  ipcMain.handle("edmg:setStudioHome", async (_event, targetPath) => {
-    const studioHome = resolveConfiguredPath(targetPath);
+  const saveStorageSettings = async (nextSettings = {}) => {
+    const requested = nextSettings && typeof nextSettings === "object" ? nextSettings : {};
+    const studioHome = resolveConfiguredPath(requested.studioHome || requested.home || requested.path);
     if (!studioHome) {
       return { ok: false, error: "Pick a valid folder first." };
     }
+
     const currentPaths = selectStudioPathSet(getStudioPaths());
-    const dataDir = path.join(studioHome, "data");
-    process.env.EDMG_STUDIO_HOME = studioHome;
-    process.env.EDMG_STUDIO_DATA_DIR = dataDir;
-    const targetPaths = selectStudioPathSet(getStudioPaths(studioHome));
+    const requestedOverrides = {
+      dataDir: requested.dataDir,
+      modelsDir: requested.modelsDir,
+      cacheRoot: requested.cacheRoot,
+      logsDir: requested.logsDir,
+      externalDir: requested.externalDir,
+    };
+    const trimmedOverrides = trimStorageOverrides(requestedOverrides, studioHome);
+    const targetPaths = syncStorageSettingsToProcessEnv(studioHome, trimmedOverrides);
     const pendingMigration = buildPendingMigration(currentPaths, targetPaths);
 
     const nextConfig = {
       ...readBootstrapConfig(),
       studioHome,
+      storageSettings: trimmedOverrides,
       updatedAt: new Date().toISOString(),
     };
     if (pendingMigration) {
@@ -930,7 +1108,11 @@ function registerIpcHandlers() {
     writeLauncherEnv({
       ...readLauncherEnv(),
       EDMG_STUDIO_HOME: studioHome,
-      EDMG_STUDIO_DATA_DIR: dataDir,
+      EDMG_STUDIO_DATA_DIR: targetPaths.dataDir,
+      EDMG_STUDIO_MODELS_DIR: targetPaths.modelsDir,
+      EDMG_STUDIO_CACHE_DIR: targetPaths.cacheRoot,
+      EDMG_STUDIO_LOGS_DIR: targetPaths.logsDir,
+      EDMG_STUDIO_EXTERNAL_DIR: targetPaths.externalDir,
     });
 
     return {
@@ -938,9 +1120,17 @@ function registerIpcHandlers() {
       restartRequired: true,
       migrationPlanned: !!pendingMigration,
       migrationSummary: summarizePendingMigration(pendingMigration),
-      ...getStudioPaths(studioHome),
+      ...targetPaths,
     };
-  });
+  };
+
+  ipcMain.handle("edmg:setStorageSettings", async (_event, nextSettings = {}) =>
+    saveStorageSettings(nextSettings)
+  );
+
+  ipcMain.handle("edmg:setStudioHome", async (_event, targetPath) =>
+    saveStorageSettings({ studioHome: targetPath })
+  );
 
   ipcMain.handle("edmg:setAiSettings", async (_event, nextSettings = {}) => {
     const aiSettings = syncAiSettingsToProcessEnv(nextSettings);
