@@ -24,6 +24,17 @@ declare global {
         lastMigration?: any;
         source: string;
       }>;
+      getAiSettings?: () => Promise<{
+        ok: boolean;
+        mode: string;
+        provider: string;
+        aiBaseUrl: string;
+        ollamaUrl: string;
+        ollamaModel: string;
+        openaiCompatBaseUrl: string;
+        openaiCompatModel: string;
+        source: string;
+      }>;
       setStudioHome?: (path: string) => Promise<{
         ok: boolean;
         error?: string;
@@ -33,6 +44,26 @@ declare global {
         studioHome?: string;
         dataDir?: string;
         cacheRoot?: string;
+      }>;
+      setAiSettings?: (settings: {
+        mode: string;
+        provider: string;
+        aiBaseUrl: string;
+        ollamaUrl: string;
+        ollamaModel: string;
+        openaiCompatBaseUrl: string;
+        openaiCompatModel: string;
+      }) => Promise<{
+        ok: boolean;
+        error?: string;
+        restartRequired?: boolean;
+        mode?: string;
+        provider?: string;
+        aiBaseUrl?: string;
+        ollamaUrl?: string;
+        ollamaModel?: string;
+        openaiCompatBaseUrl?: string;
+        openaiCompatModel?: string;
       }>;
       relaunch?: () => Promise<{ ok: boolean }>;
     };

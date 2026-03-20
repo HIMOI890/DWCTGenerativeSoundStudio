@@ -33,6 +33,35 @@ const DEV_SERVER_URL =
   process.env.EDMG_STUDIO_DEV_SERVER_URL ??
   `http://127.0.0.1:${UI_PORT}`;
 
+const AI_SETTINGS_DEFAULTS = Object.freeze({
+  mode: "local",
+  provider: "ollama",
+  aiBaseUrl: "http://127.0.0.1:7862",
+  ollamaUrl: "http://127.0.0.1:11434",
+  ollamaModel: "qwen2.5:3b-instruct",
+  openaiCompatBaseUrl: "http://127.0.0.1:8000",
+  openaiCompatModel: "qwen2.5-7b-instruct",
+});
+
+const AI_SETTINGS_ENV_KEYS = Object.freeze({
+  mode: "EDMG_AI_MODE",
+  provider: "EDMG_AI_PROVIDER",
+  aiBaseUrl: "EDMG_AI_BASE_URL",
+  ollamaUrl: "EDMG_AI_OLLAMA_URL",
+  ollamaModel: "EDMG_AI_OLLAMA_MODEL",
+  openaiCompatBaseUrl: "EDMG_AI_OPENAI_COMPAT_BASE_URL",
+  openaiCompatModel: "EDMG_AI_OPENAI_COMPAT_MODEL",
+});
+
+const AI_LOCAL_PROVIDER_ALIASES = Object.freeze({
+  ollama: "ollama",
+  openai: "openai_compat",
+  "openai-compatible": "openai_compat",
+  openai_compat: "openai_compat",
+  rule_based: "rule_based",
+  none: "rule_based",
+});
+
 let currentBackendUrl = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
 console.log(`EDMG_currentBackendUrl=${currentBackendUrl}`);
 
@@ -103,6 +132,101 @@ function writeLauncherEnv(nextConfig) {
   fs.writeFileSync(filePath, JSON.stringify(nextConfig, null, 2), "utf8");
   return true;
 }
+
+function pickConfiguredString(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function getRawAiSettingsFromEnv(envLike) {
+  const env = envLike && typeof envLike === "object" ? envLike : {};
+  return {
+    mode: env[AI_SETTINGS_ENV_KEYS.mode],
+    provider: env[AI_SETTINGS_ENV_KEYS.provider],
+    aiBaseUrl: env[AI_SETTINGS_ENV_KEYS.aiBaseUrl],
+    ollamaUrl: env[AI_SETTINGS_ENV_KEYS.ollamaUrl],
+    ollamaModel: env[AI_SETTINGS_ENV_KEYS.ollamaModel],
+    openaiCompatBaseUrl: env[AI_SETTINGS_ENV_KEYS.openaiCompatBaseUrl],
+    openaiCompatModel: env[AI_SETTINGS_ENV_KEYS.openaiCompatModel],
+  };
+}
+
+function readBootstrapAiSettingsRaw() {
+  const bootstrapConfig = readBootstrapConfig();
+  if (bootstrapConfig?.aiSettings && typeof bootstrapConfig.aiSettings === "object") {
+    return bootstrapConfig.aiSettings;
+  }
+  return {};
+}
+
+function hasAnyAiSetting(rawSettings) {
+  return Object.values(rawSettings ?? {}).some((value) => typeof value === "string" && value.trim());
+}
+
+function normalizeAiMode(rawValue) {
+  const mode = String(rawValue ?? "").trim().toLowerCase();
+  return mode === "http" || mode === "remote" ? "http" : "local";
+}
+
+function normalizeAiProvider(rawValue) {
+  const provider = String(rawValue ?? "").trim().toLowerCase();
+  return AI_LOCAL_PROVIDER_ALIASES[provider] ?? AI_SETTINGS_DEFAULTS.provider;
+}
+
+function normalizeAiSettings(rawSettings = {}) {
+  const current = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
+  return {
+    mode: normalizeAiMode(current.mode),
+    provider: normalizeAiProvider(current.provider),
+    aiBaseUrl: pickConfiguredString(current.aiBaseUrl, AI_SETTINGS_DEFAULTS.aiBaseUrl),
+    ollamaUrl: pickConfiguredString(current.ollamaUrl, AI_SETTINGS_DEFAULTS.ollamaUrl),
+    ollamaModel: pickConfiguredString(current.ollamaModel, AI_SETTINGS_DEFAULTS.ollamaModel),
+    openaiCompatBaseUrl: pickConfiguredString(
+      current.openaiCompatBaseUrl,
+      AI_SETTINGS_DEFAULTS.openaiCompatBaseUrl
+    ),
+    openaiCompatModel: pickConfiguredString(
+      current.openaiCompatModel,
+      AI_SETTINGS_DEFAULTS.openaiCompatModel
+    ),
+  };
+}
+
+function getConfiguredAiSettings() {
+  const launcherRaw = getRawAiSettingsFromEnv(readLauncherEnv());
+  const bootstrapRaw = readBootstrapAiSettingsRaw();
+  const envRaw = getRawAiSettingsFromEnv(process.env);
+  const configured = normalizeAiSettings({
+    ...launcherRaw,
+    ...bootstrapRaw,
+    ...envRaw,
+  });
+
+  let source = "default";
+  if (hasAnyAiSetting(launcherRaw)) source = "launcher";
+  if (hasAnyAiSetting(bootstrapRaw)) source = "bootstrap";
+  if (hasAnyAiSetting(envRaw)) source = "env";
+
+  return { ...configured, source };
+}
+
+function syncAiSettingsToProcessEnv(rawSettings) {
+  const aiSettings = normalizeAiSettings(rawSettings);
+  process.env.EDMG_AI_MODE = aiSettings.mode;
+  process.env.EDMG_AI_PROVIDER = aiSettings.provider;
+  process.env.EDMG_AI_BASE_URL = aiSettings.aiBaseUrl;
+  process.env.EDMG_AI_OLLAMA_URL = aiSettings.ollamaUrl;
+  process.env.EDMG_AI_OLLAMA_MODEL = aiSettings.ollamaModel;
+  process.env.EDMG_AI_OPENAI_COMPAT_BASE_URL = aiSettings.openaiCompatBaseUrl;
+  process.env.EDMG_AI_OPENAI_COMPAT_MODEL = aiSettings.openaiCompatModel;
+  return aiSettings;
+}
+
+syncAiSettingsToProcessEnv(getConfiguredAiSettings());
 
 function getConfiguredDataDir(includeLauncher = true) {
   const explicitDataDir = resolveConfiguredPath(process.env.EDMG_STUDIO_DATA_DIR);
@@ -229,6 +353,19 @@ function buildManagedStudioEnv(studioHomeOverride = "") {
   }
 
   return managed;
+}
+
+function buildManagedAiEnv() {
+  const aiSettings = getConfiguredAiSettings();
+  return {
+    EDMG_AI_MODE: aiSettings.mode,
+    EDMG_AI_PROVIDER: aiSettings.provider,
+    EDMG_AI_BASE_URL: aiSettings.aiBaseUrl,
+    EDMG_AI_OLLAMA_URL: aiSettings.ollamaUrl,
+    EDMG_AI_OLLAMA_MODEL: aiSettings.ollamaModel,
+    EDMG_AI_OPENAI_COMPAT_BASE_URL: aiSettings.openaiCompatBaseUrl,
+    EDMG_AI_OPENAI_COMPAT_MODEL: aiSettings.openaiCompatModel,
+  };
 }
 
 function normalizePath(rawValue) {
@@ -627,13 +764,10 @@ async function startBackendIfNeeded() {
       env: {
         ...process.env,
         ...managedStudioEnv,
+        ...buildManagedAiEnv(),
         EDMG_STUDIO_BACKEND_HOST: BACKEND_HOST,
         EDMG_STUDIO_BACKEND_PORT: String(BACKEND_PORT),
         EDMG_STUDIO_DATA_DIR: backendDataDir,
-        EDMG_AI_MODE: process.env.EDMG_AI_MODE ?? "local",
-        EDMG_AI_PROVIDER: process.env.EDMG_AI_PROVIDER ?? "ollama",
-        EDMG_AI_OLLAMA_URL: process.env.EDMG_AI_OLLAMA_URL ?? "http://127.0.0.1:11434",
-        EDMG_AI_OLLAMA_MODEL: process.env.EDMG_AI_OLLAMA_MODEL ?? "qwen2.5:3b-instruct",
         EDMG_FFMPEG_PATH: ffmpegPath,
       },
     });
@@ -768,6 +902,7 @@ async function createMainWindow() {
 function registerIpcHandlers() {
   ipcMain.handle("edmg:getBackendUrl", async () => currentBackendUrl);
   ipcMain.handle("edmg:getStudioPaths", async () => ({ ok: true, ...getStudioPaths() }));
+  ipcMain.handle("edmg:getAiSettings", async () => ({ ok: true, ...getConfiguredAiSettings() }));
 
   ipcMain.handle("edmg:setStudioHome", async (_event, targetPath) => {
     const studioHome = resolveConfiguredPath(targetPath);
@@ -804,6 +939,32 @@ function registerIpcHandlers() {
       migrationPlanned: !!pendingMigration,
       migrationSummary: summarizePendingMigration(pendingMigration),
       ...getStudioPaths(studioHome),
+    };
+  });
+
+  ipcMain.handle("edmg:setAiSettings", async (_event, nextSettings = {}) => {
+    const aiSettings = syncAiSettingsToProcessEnv(nextSettings);
+    const nextConfig = {
+      ...readBootstrapConfig(),
+      aiSettings,
+      updatedAt: new Date().toISOString(),
+    };
+    writeBootstrapConfig(nextConfig);
+    writeLauncherEnv({
+      ...readLauncherEnv(),
+      EDMG_AI_MODE: aiSettings.mode,
+      EDMG_AI_PROVIDER: aiSettings.provider,
+      EDMG_AI_BASE_URL: aiSettings.aiBaseUrl,
+      EDMG_AI_OLLAMA_URL: aiSettings.ollamaUrl,
+      EDMG_AI_OLLAMA_MODEL: aiSettings.ollamaModel,
+      EDMG_AI_OPENAI_COMPAT_BASE_URL: aiSettings.openaiCompatBaseUrl,
+      EDMG_AI_OPENAI_COMPAT_MODEL: aiSettings.openaiCompatModel,
+    });
+
+    return {
+      ok: true,
+      restartRequired: true,
+      ...aiSettings,
     };
   });
 

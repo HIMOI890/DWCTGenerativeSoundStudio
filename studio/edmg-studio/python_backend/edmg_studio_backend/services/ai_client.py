@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -92,8 +92,15 @@ class LocalAiDirectorClient:
             return
         from edmg_ai_service.config import Settings as AiSettings
         from edmg_ai_service.provider_factory import build_provider
+        from .config import settings as backend_settings
+        from .secrets import SecretStore
 
         self._provider_settings = AiSettings()
+        provider_name = (self._provider_settings.provider or "").strip().lower()
+        if provider_name in ("openai_compat", "openai-compatible", "openai") and not self._provider_settings.openai_compat_api_key:
+            secret_api_key = SecretStore(backend_settings.data_dir).get("openai_compat_api_key")
+            if secret_api_key:
+                self._provider_settings = replace(self._provider_settings, openai_compat_api_key=secret_api_key)
         self._provider = build_provider(self._provider_settings)
 
     def plan(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -133,11 +140,22 @@ class LocalAiDirectorClient:
     def status(self) -> dict[str, Any]:
         try:
             self._load()
+            provider_name = getattr(self._provider, "name", None)
+            provider_status = {
+                "provider": provider_name,
+                "model": getattr(self._provider, "model", None),
+            }
+            if provider_name == "ollama":
+                provider_status["base_url"] = getattr(self._provider_settings, "ollama_url", None)
+            elif provider_name == "openai_compat":
+                provider_status["base_url"] = getattr(self._provider_settings, "openai_compat_base_url", None)
+                provider_status["api_key_configured"] = bool(
+                    getattr(self._provider_settings, "openai_compat_api_key", None)
+                )
             return {
                 "mode": "local",
                 "ok": True,
-                "provider": getattr(self._provider, "name", None),
-                "model": getattr(self._provider, "model", None),
+                **provider_status,
             }
         except Exception as e:
             return {"mode": "local", "ok": False, "error": str(e)}

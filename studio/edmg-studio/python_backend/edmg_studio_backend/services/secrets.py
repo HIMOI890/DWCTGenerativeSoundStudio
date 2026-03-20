@@ -48,6 +48,7 @@ class SecretsStatus:
     available: bool
     has_hf_token: bool
     has_civitai_api_key: bool
+    has_openai_compat_api_key: bool
     note: str | None = None
 
 
@@ -90,10 +91,18 @@ class SecretStore:
     def status(self) -> SecretsStatus:
         hf = bool(self.get("hf_token"))
         cv = bool(self.get("civitai_api_key"))
+        oa = bool(self.get("openai_compat_api_key"))
         store = "keyring" if self._keyring_ok else "file"
         if self._forced in ("file", "plaintext"):
             store = "file"
-        return SecretsStatus(store=store, available=True, has_hf_token=hf, has_civitai_api_key=cv, note=self._note)
+        return SecretsStatus(
+            store=store,
+            available=True,
+            has_hf_token=hf,
+            has_civitai_api_key=cv,
+            has_openai_compat_api_key=oa,
+            note=self._note,
+        )
 
     def get(self, name: str) -> str | None:
         name = (name or "").strip().lower()

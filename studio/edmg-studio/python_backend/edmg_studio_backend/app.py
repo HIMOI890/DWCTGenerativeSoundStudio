@@ -860,6 +860,14 @@ def get_config():
         "ai_mode": settings.ai_mode,
         "ai_base_url": settings.ai_base_url,
         "ai_timeout_s": settings.ai_timeout_s,
+        "ai_provider": os.getenv("EDMG_AI_PROVIDER", "ollama").strip().lower() or "ollama",
+        "ai_ollama_url": os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434").strip(),
+        "ai_ollama_model": os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct").strip(),
+        "ai_openai_compat_base_url": os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000").strip(),
+        "ai_openai_compat_model": os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL", "qwen2.5-7b-instruct").strip(),
+        "ai_openai_compat_api_key_configured": bool(
+            secrets.get("openai_compat_api_key") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
+        ),
         "comfyui_url": settings.comfyui_url,
         "comfyui_urls": list(settings.resolved_comfyui_urls()),
         "comfyui_node_concurrency": settings.comfyui_node_concurrency,
@@ -882,6 +890,7 @@ def secrets_status():
         "available": st.available,
         "has_hf_token": st.has_hf_token,
         "has_civitai_api_key": st.has_civitai_api_key,
+        "has_openai_compat_api_key": st.has_openai_compat_api_key,
         "note": st.note,
     }
 
@@ -890,8 +899,11 @@ def secrets_status():
 def secrets_set(payload: dict[str, Any]):
     name = str((payload or {}).get("name") or "").strip().lower()
     value = str((payload or {}).get("value") or "")
-    if name not in ("hf_token", "civitai_api_key"):
-        raise UserFacingError("Unknown secret", hint="Supported: hf_token, civitai_api_key")
+    if name not in ("hf_token", "civitai_api_key", "openai_compat_api_key"):
+        raise UserFacingError(
+            "Unknown secret",
+            hint="Supported: hf_token, civitai_api_key, openai_compat_api_key",
+        )
     if not value:
         raise UserFacingError("Missing value", hint="Paste the token/key value, then click Save.")
     secrets.set(name, value)
@@ -901,8 +913,11 @@ def secrets_set(payload: dict[str, Any]):
 @app.post("/v1/settings/secrets/clear")
 def secrets_clear(payload: dict[str, Any]):
     name = str((payload or {}).get("name") or "").strip().lower()
-    if name not in ("hf_token", "civitai_api_key"):
-        raise UserFacingError("Unknown secret", hint="Supported: hf_token, civitai_api_key")
+    if name not in ("hf_token", "civitai_api_key", "openai_compat_api_key"):
+        raise UserFacingError(
+            "Unknown secret",
+            hint="Supported: hf_token, civitai_api_key, openai_compat_api_key",
+        )
     secrets.delete(name)
     return {"ok": True}
 
