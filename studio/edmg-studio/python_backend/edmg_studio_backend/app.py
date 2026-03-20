@@ -70,10 +70,12 @@ from .services.setup_wizard import (
     pull_ollama_model,
     download_and_extract_portable,
     ComfyPortableProcess,
+    OllamaManagedProcess,
     check_ffmpeg,
     comfy_portable_installed,
     download_and_install_7zip,
     install_backend_bundle,
+    _find_ollama_exe,
     _find_7z_exe,
 )
 
@@ -89,6 +91,7 @@ settings.models_dir.mkdir(parents=True, exist_ok=True)
 settings.cache_dir.mkdir(parents=True, exist_ok=True)
 settings.logs_dir.mkdir(parents=True, exist_ok=True)
 settings.external_dir.mkdir(parents=True, exist_ok=True)
+settings.ollama_models_dir.mkdir(parents=True, exist_ok=True)
 
 store = ProjectStore(settings.data_dir)
 jobs = JobStore(store.projects_dir)
@@ -112,6 +115,7 @@ models = ModelManager(
 )
 
 comfy_portable = ComfyPortableProcess()
+ollama_managed = OllamaManagedProcess()
 
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
@@ -865,6 +869,7 @@ def get_config():
         "studio_home": str(settings.studio_home),
         "data_dir": str(settings.data_dir),
         "models_dir": str(settings.models_dir),
+        "ollama_models_dir": str(settings.ollama_models_dir),
         "cache_dir": str(settings.cache_dir),
         "logs_dir": str(settings.logs_dir),
         "external_dir": str(settings.external_dir),
@@ -997,6 +1002,24 @@ def setup_status():
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct")
     ollama = check_ollama(ollama_url, ollama_model)
+    ollama_exe = None
+    ollama_exe_error = None
+    try:
+        ollama_exe = _find_ollama_exe(settings.external_dir)
+    except Exception as e:
+        ollama_exe_error = str(e)
+    ollama["managed_models_dir"] = str(settings.ollama_models_dir)
+    ollama["managed_launch_script"] = str((settings.external_dir / "ollama" / "start_ollama_studio.bat").resolve())
+    ollama["launch_available"] = bool(ollama_exe)
+    ollama["ollama_exe"] = ollama_exe
+    ollama["managed_running"] = bool(ollama_managed.running())
+    if ollama_exe_error and not ollama.get("ok"):
+        ollama["launch_hint"] = ollama_exe_error
+    elif ollama_exe and not ollama.get("ok"):
+        ollama["hint"] = (
+            f"Studio can start Ollama with models stored under {settings.ollama_models_dir}. "
+            "Use Start Studio-managed Ollama, or run the helper script after installing Ollama."
+        )
 
     # ComfyUI availability
     try:
@@ -1036,7 +1059,7 @@ def setup_status():
         seven_path = _find_7z_exe(settings.external_dir, settings.data_dir)
         seven = {"ok": True, "path": seven_path, "hint": None}
     except Exception as e:
-        seven = {"ok": False, "path": None, "hint": "Install 7-Zip (recommended) or set EDMG_7Z_PATH / bundle 7z.exe in the Studio external tools folder."}
+        seven = {"ok": False, "path": None, "hint": "Download the portable 7-Zip CLI into the Studio external tools folder, or set EDMG_7Z_PATH."}
 
     return {
             "ok": True,
@@ -1054,7 +1077,28 @@ def setup_status():
 @app.post("/v1/setup/ollama/download_and_run")
 def setup_ollama_download_and_run():
     dest = settings.external_dir / "_installers"
-    task = setup_tasks.start("download_ollama_installer", download_and_run_ollama_installer, dest)
+    url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
+    task = setup_tasks.start(
+        "download_ollama_installer",
+        download_and_run_ollama_installer,
+        dest,
+        settings.external_dir,
+        settings.models_dir,
+        url,
+    )
+    return {"ok": True, "task": task.__dict__}
+
+
+@app.post("/v1/setup/ollama/start_managed")
+def setup_ollama_start_managed():
+    url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
+    task = setup_tasks.start(
+        "start_managed_ollama",
+        ollama_managed.start,
+        settings.external_dir,
+        settings.models_dir,
+        url,
+    )
     return {"ok": True, "task": task.__dict__}
 
 
@@ -1069,7 +1113,7 @@ def setup_ollama_pull(payload: dict[str, Any]):
 
 @app.post("/v1/setup/7zip/install")
 def setup_7zip_install():
-    """Install 7-Zip on Windows (required for extracting some .7z archives)."""
+    """Download the portable 7-Zip CLI (required for extracting some .7z archives)."""
     task = setup_tasks.start("install_7zip", download_and_install_7zip, settings.external_dir, settings.data_dir)
     return {"ok": True, "task": task.__dict__}
 
@@ -1108,8 +1152,12 @@ def setup_full_install(payload: dict[str, Any]):
         if ai_config.get("ollama_required"):
             ollama_status = check_ollama(ollama_url, model)
             if not ollama_status.get("ok"):
-                dest = settings.external_dir / "_installers"
-                download_and_run_ollama_installer(task, dest)
+                try:
+                    ollama_managed.start(task, settings.external_dir, settings.models_dir, ollama_url)
+                except Exception:
+                    dest = settings.external_dir / "_installers"
+                    download_and_run_ollama_installer(task, dest, settings.external_dir, settings.models_dir, ollama_url)
+                    raise RuntimeError("Ollama installer launched. Finish installing Ollama, then rerun Full Setup.")
             else:
                 SetupTaskManager.log(task, "Ollama is already reachable.")
 

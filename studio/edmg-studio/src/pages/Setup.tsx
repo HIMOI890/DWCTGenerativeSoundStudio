@@ -426,14 +426,14 @@ async function run(action: string, path: string, body: any = {}) {
     <Badge ok={sevenOk} label={sevenOk ? "OK" : "Missing"} />
   </div>
   <div className="small" style={{ marginTop: 6 }}>
-    Required to extract some .7z archives (BCJ2), including some ComfyUI Portable releases.
+    Required to extract some .7z archives (BCJ2), including some ComfyUI Portable releases. Studio now keeps the portable CLI under your External tools root.
   </div>
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
     <button
       disabled={busy === "sevenzip"}
       onClick={() => run("sevenzip", "/v1/setup/7zip/install", {})}
     >
-      {busy === "sevenzip" ? "Installing…" : "Install 7-Zip"}
+      {busy === "sevenzip" ? "Downloading…" : "Download Portable 7-Zip"}
     </button>
   </div>
   {!sevenOk && status?.sevenzip?.hint && (
@@ -454,6 +454,9 @@ async function run(action: string, path: string, body: any = {}) {
               ? <>Studio planning is configured to use Ollama locally at <code>{status?.ollama?.url ?? "http://127.0.0.1:11434"}</code>.</>
               : <>Current AI path is <b>{aiLabel}</b>, so Ollama is optional unless you want a local fallback.</>}
           </div>
+          <div className="small" style={{ marginTop: 6, opacity: 0.9 }}>
+            Studio-managed Ollama models live under <code>{status?.ollama?.managed_models_dir ?? "(set your Models path first)"}</code>.
+          </div>
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               className="secondary"
@@ -467,12 +470,29 @@ async function run(action: string, path: string, body: any = {}) {
             >
               {busy === "ollama" ? "Launching…" : "Download & Run Ollama Installer"}
             </button>
+            <button
+              className="secondary"
+              disabled={!status?.ollama?.launch_available || busy === "ollama_managed"}
+              onClick={() => run("ollama_managed", "/v1/setup/ollama/start_managed", {})}
+            >
+              {busy === "ollama_managed" ? "Starting…" : "Start Studio-managed Ollama"}
+            </button>
           </div>
           {!ollamaOk && ollamaRequired && status?.ollama?.hint && (
             <div className="small" style={{ marginTop: 10 }}>
               Fix: {status.ollama.hint}
             </div>
           )}
+          {!status?.ollama?.launch_available && status?.ollama?.launch_hint ? (
+            <div className="small" style={{ marginTop: 10, opacity: 0.88 }}>
+              Launch path: {status.ollama.launch_hint}
+            </div>
+          ) : null}
+          {status?.ollama?.managed_launch_script ? (
+            <div className="small" style={{ marginTop: 10, opacity: 0.88 }}>
+              Helper script: <code>{status.ollama.managed_launch_script}</code>
+            </div>
+          ) : null}
           {!ollamaRequired && aiConfig?.hint ? (
             <div className="small" style={{ marginTop: 10, opacity: 0.88 }}>
               {aiConfig.hint}
@@ -489,6 +509,9 @@ async function run(action: string, path: string, body: any = {}) {
             {modelRequired
               ? <>Default Ollama model: <code>{status?.ollama?.model ?? "(unknown)"}</code></>
               : <>The active AI path is <b>{aiLabel}</b>, so pulling an Ollama model is optional.</>}
+          </div>
+          <div className="small" style={{ marginTop: 6, opacity: 0.9 }}>
+            Pulled Ollama models are expected under <code>{status?.ollama?.managed_models_dir ?? "(unknown)"}</code> when Studio starts Ollama itself.
           </div>
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button

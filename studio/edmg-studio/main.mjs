@@ -447,6 +447,7 @@ function buildManagedStudioEnv(studioHomeOverride = "", storageOverrideValues = 
     EDMG_STUDIO_CACHE_DIR: paths.cacheRoot,
     EDMG_STUDIO_LOGS_DIR: paths.logsDir,
     EDMG_STUDIO_EXTERNAL_DIR: paths.externalDir,
+    OLLAMA_MODELS: path.join(paths.modelsDir, "ollama"),
     PIP_CACHE_DIR: path.join(paths.cacheRoot, "pip"),
     XDG_CACHE_HOME: path.join(paths.cacheRoot, "xdg"),
     HF_HOME: path.join(paths.cacheRoot, "huggingface"),
@@ -481,6 +482,7 @@ function syncStorageSettingsToProcessEnv(studioHome = "", storageOverrides = nul
     EDMG_STUDIO_CACHE_DIR: paths.cacheRoot,
     EDMG_STUDIO_LOGS_DIR: paths.logsDir,
     EDMG_STUDIO_EXTERNAL_DIR: paths.externalDir,
+    OLLAMA_MODELS: path.join(paths.modelsDir, "ollama"),
     PIP_CACHE_DIR: path.join(paths.cacheRoot, "pip"),
     XDG_CACHE_HOME: path.join(paths.cacheRoot, "xdg"),
     HF_HOME: path.join(paths.cacheRoot, "huggingface"),
@@ -925,6 +927,7 @@ async function startBackendIfNeeded() {
   console.log("[backend] EDMG_STUDIO_DATA_DIR=", backendDataDir);
   console.log("[backend] EDMG_STUDIO_MODELS_DIR=", managedStudioEnv.EDMG_STUDIO_MODELS_DIR);
   console.log("[backend] EDMG_STUDIO_EXTERNAL_DIR=", managedStudioEnv.EDMG_STUDIO_EXTERNAL_DIR);
+  console.log("[backend] OLLAMA_MODELS=", managedStudioEnv.OLLAMA_MODELS);
   console.log("[backend] EDMG_FFMPEG_PATH=", ffmpegPath);
 
   try {
@@ -1113,6 +1116,7 @@ function registerIpcHandlers() {
       EDMG_STUDIO_CACHE_DIR: targetPaths.cacheRoot,
       EDMG_STUDIO_LOGS_DIR: targetPaths.logsDir,
       EDMG_STUDIO_EXTERNAL_DIR: targetPaths.externalDir,
+      OLLAMA_MODELS: path.join(targetPaths.modelsDir, "ollama"),
     });
 
     return {

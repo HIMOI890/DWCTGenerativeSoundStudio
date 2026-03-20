@@ -68,13 +68,15 @@ def _derive_studio_home(data_dir: Path) -> Path:
 def _default_storage_env(studio_home: Path, data_dir: Path | None = None) -> dict[str, str]:
     home = studio_home.expanduser().resolve()
     data = data_dir.expanduser().resolve() if data_dir is not None else (home / "data").resolve()
+    models = (home / "models").resolve()
     return {
         "EDMG_STUDIO_HOME": str(home),
         "EDMG_STUDIO_DATA_DIR": str(data),
-        "EDMG_STUDIO_MODELS_DIR": str((home / "models").resolve()),
+        "EDMG_STUDIO_MODELS_DIR": str(models),
         "EDMG_STUDIO_CACHE_DIR": str((home / "cache").resolve()),
         "EDMG_STUDIO_LOGS_DIR": str((home / "logs").resolve()),
         "EDMG_STUDIO_EXTERNAL_DIR": str((home / "external").resolve()),
+        "OLLAMA_MODELS": str((models / "ollama").resolve()),
     }
 
 def _persist_studio_location(*, studio_home: Path | None = None, data_dir: Path | None = None) -> tuple[Path, Path]:

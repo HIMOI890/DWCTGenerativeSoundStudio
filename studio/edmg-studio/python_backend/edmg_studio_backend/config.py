@@ -74,6 +74,18 @@ class Settings:
         "EDMG_STUDIO_EXTERNAL_DIR",
         str((_default_studio_home(Path(os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve()) / "external").resolve()),
     )
+    ollama_models_dir: Path = _resolve_path_env(
+        "OLLAMA_MODELS",
+        str(
+            (
+                _resolve_path_env(
+                    "EDMG_STUDIO_MODELS_DIR",
+                    str((_default_studio_home(Path(os.getenv("EDMG_STUDIO_DATA_DIR", "./data")).resolve()) / "models").resolve()),
+                )
+                / "ollama"
+            ).resolve()
+        ),
+    )
 
     # AI mode:
     #  - local (default): run AI in-process using services/ai/edmg_ai_service and talk to Ollama/OpenAI-compat directly.
