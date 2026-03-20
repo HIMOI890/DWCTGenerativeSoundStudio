@@ -922,11 +922,67 @@ def secrets_clear(payload: dict[str, Any]):
     return {"ok": True}
 
 
+def _setup_ai_config() -> dict[str, Any]:
+    ai_mode = (settings.ai_mode or "local").strip().lower() or "local"
+    ai_provider = (os.getenv("EDMG_AI_PROVIDER", "ollama").strip().lower() or "ollama")
+    ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
+    ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct")
+    openai_compat_base_url = os.getenv("EDMG_AI_OPENAI_COMPAT_BASE_URL", "http://127.0.0.1:8000")
+    openai_compat_model = os.getenv("EDMG_AI_OPENAI_COMPAT_MODEL", "qwen2.5-7b-instruct")
+    openai_compat_api_key_configured = bool(
+        secrets.get("openai_compat_api_key") or os.getenv("EDMG_AI_OPENAI_COMPAT_API_KEY")
+    )
+
+    if ai_mode in ("http", "remote"):
+        return {
+            "mode": "http",
+            "provider": "remote_ai_service",
+            "label": "Remote AI service",
+            "ollama_required": False,
+            "model_required": False,
+            "base_url": settings.ai_base_url,
+            "hint": "Studio planning is configured to call a separate EDMG AI service over HTTP.",
+        }
+
+    if ai_provider in ("openai_compat", "openai-compatible", "openai"):
+        return {
+            "mode": "local",
+            "provider": "openai_compat",
+            "label": "Local OpenAI-compatible provider",
+            "ollama_required": False,
+            "model_required": False,
+            "base_url": openai_compat_base_url,
+            "model": openai_compat_model,
+            "openai_compat_api_key_configured": openai_compat_api_key_configured,
+            "hint": "Studio planning is configured for an OpenAI-compatible endpoint instead of Ollama.",
+        }
+
+    if ai_provider == "rule_based":
+        return {
+            "mode": "local",
+            "provider": "rule_based",
+            "label": "Rule-based fallback",
+            "ollama_required": False,
+            "model_required": False,
+            "hint": "Studio planning is configured for the built-in rule-based fallback. Ollama is optional.",
+        }
+
+    return {
+        "mode": "local",
+        "provider": "ollama",
+        "label": "Local Ollama",
+        "ollama_required": True,
+        "model_required": True,
+        "base_url": ollama_url,
+        "model": ollama_model,
+        "hint": "Studio planning is configured for local Ollama.",
+    }
+
+
 @app.get("/v1/setup/status")
 def setup_status():
     """Installer GUI status for required components."""
-    import os
-
+    ai_config = _setup_ai_config()
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
     ollama_model = os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct")
     ollama = check_ollama(ollama_url, ollama_model)
@@ -973,6 +1029,7 @@ def setup_status():
 
     return {
             "ok": True,
+            "ai_config": ai_config,
             "backend_bundle": backend_bundle,
             "ollama": ollama,
             "comfyui": comfy_status,
@@ -1021,6 +1078,7 @@ def setup_full_install(payload: dict[str, Any]):
     bundle = str((payload or {}).get("bundle") or "studio_bundle").strip() or "studio_bundle"
     model = (payload or {}).get("model") or os.getenv("EDMG_AI_OLLAMA_MODEL", "qwen2.5:3b-instruct")
     ollama_url = os.getenv("EDMG_AI_OLLAMA_URL", "http://127.0.0.1:11434")
+    ai_config = _setup_ai_config()
 
     def _run(task):
         # 1) Ensure backend runtime bundle is present for audio/ASR/internal render paths.
@@ -1035,22 +1093,27 @@ def setup_full_install(payload: dict[str, Any]):
         except Exception:
             download_and_install_7zip(task, settings.data_dir)
 
-        # 3) Ollama installer (downloads and runs only when missing)
-        ollama_status = check_ollama(ollama_url, model)
-        if not ollama_status.get("ok"):
-            dest = settings.data_dir / "third_party" / "_installers"
-            download_and_run_ollama_installer(task, dest)
-        else:
-            SetupTaskManager.log(task, "Ollama is already reachable.")
+        # 3) Ollama installer/model only when the active AI path actually uses Ollama.
+        if ai_config.get("ollama_required"):
+            ollama_status = check_ollama(ollama_url, model)
+            if not ollama_status.get("ok"):
+                dest = settings.data_dir / "third_party" / "_installers"
+                download_and_run_ollama_installer(task, dest)
+            else:
+                SetupTaskManager.log(task, "Ollama is already reachable.")
 
-        # 4) Pull default model when it is not already present
-        ollama_status = check_ollama(ollama_url, model)
-        if not ollama_status.get("model_present"):
-            pull_ollama_model(task, ollama_url, model)
+            ollama_status = check_ollama(ollama_url, model)
+            if not ollama_status.get("model_present"):
+                pull_ollama_model(task, ollama_url, model)
+            else:
+                SetupTaskManager.log(task, f"Ollama model {model} is already present.")
         else:
-            SetupTaskManager.log(task, f"Ollama model {model} is already present.")
+            SetupTaskManager.log(
+                task,
+                f"Skipping Ollama install because Studio AI is configured for {ai_config.get('label')}.",
+            )
 
-        # 5) ComfyUI Portable install + start
+        # 4) ComfyUI Portable install + start
         if not comfy_portable_installed(settings.data_dir):
             download_and_extract_portable(task, settings.data_dir, flavor)
         else:
@@ -1068,7 +1131,7 @@ def setup_full_install(payload: dict[str, Any]):
         else:
             comfy_portable.start(task, settings.data_dir, flavor, "127.0.0.1", port)
 
-    task = setup_tasks.start(f"full_setup:{flavor}", _run)
+    task = setup_tasks.start(f"full_setup:{flavor}:{ai_config.get('provider')}", _run)
     return {"ok": True, "task": task.__dict__}
 
 

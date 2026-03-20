@@ -74,6 +74,11 @@ async function run(action: string, path: string, body: any = {}) {
   const backendBundleOk = !!status?.backend_bundle?.ok;
   const edmgOk = !!status?.edmg?.available;
   const sevenOk = !!status?.sevenzip?.ok;
+  const aiConfig = status?.ai_config ?? null;
+  const aiLabel = String(aiConfig?.label ?? "Local Ollama");
+  const ollamaRequired = !!aiConfig?.ollama_required;
+  const modelRequired = !!aiConfig?.model_required;
+  const fullSetupReady = backendBundleOk && sevenOk && comfyOk && ffOk && (!ollamaRequired || (ollamaOk && modelOk));
 
   async function browseStudioHome() {
     try {
@@ -233,10 +238,18 @@ async function run(action: string, path: string, body: any = {}) {
 <div className="card">
   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
     <div style={{ fontWeight: 800 }}>0) Full System Setup (One-Click)</div>
-    <Badge ok={backendBundleOk && ollamaOk && modelOk && comfyOk && ffOk} label={(backendBundleOk && ollamaOk && modelOk && comfyOk && ffOk) ? "Ready" : "Setup"} />
+    <Badge ok={fullSetupReady} label={fullSetupReady ? "Ready" : "Setup"} />
   </div>
   <div className="small" style={{ marginTop: 6 }}>
-    Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → Ollama installer → pull model → ComfyUI Portable install + start.
+    {ollamaRequired
+      ? "Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → Ollama installer → pull model → ComfyUI Portable install + start."
+      : `Runs the full installer pipeline: backend runtime bundle → 7-Zip (if needed) → ComfyUI Portable install + start. Ollama is skipped because Studio AI is currently set to ${aiLabel}.`}
+  </div>
+  <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+    Active AI path: <b>{aiLabel}</b>
+    {aiConfig?.base_url ? <> • endpoint <code>{aiConfig.base_url}</code></> : null}
+    {aiConfig?.model ? <> • model <code>{aiConfig.model}</code></> : null}
+    {aiConfig?.provider === "openai_compat" ? <> • API key <b>{aiConfig?.openai_compat_api_key_configured ? "saved" : "not saved"}</b></> : null}
   </div>
   <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
     <button
@@ -251,6 +264,11 @@ async function run(action: string, path: string, body: any = {}) {
     >
       {busy === "full_nvidia" ? "Running…" : "Full Setup (NVIDIA)"}
     </button>
+    {onNavigate ? (
+      <button className="secondary" onClick={() => onNavigate("settings")}>
+        Open AI Settings
+      </button>
+    ) : null}
   </div>
 </div>
 
@@ -309,10 +327,12 @@ async function run(action: string, path: string, body: any = {}) {
         <div className="card">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div style={{ fontWeight: 800 }}>1) Ollama (AI)</div>
-            <Badge ok={ollamaOk} label={ollamaOk ? "OK" : "Missing"} />
+            <Badge ok={ollamaRequired ? ollamaOk : true} label={ollamaRequired ? (ollamaOk ? "OK" : "Missing") : (ollamaOk ? "Installed" : "Optional")} />
           </div>
           <div className="small" style={{ marginTop: 6 }}>
-            EDMG uses Ollama locally at <code>http://127.0.0.1:11434</code>.
+            {ollamaRequired
+              ? <>Studio planning is configured to use Ollama locally at <code>{status?.ollama?.url ?? "http://127.0.0.1:11434"}</code>.</>
+              : <>Current AI path is <b>{aiLabel}</b>, so Ollama is optional unless you want a local fallback.</>}
           </div>
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
@@ -328,20 +348,27 @@ async function run(action: string, path: string, body: any = {}) {
               {busy === "ollama" ? "Launching…" : "Download & Run Ollama Installer"}
             </button>
           </div>
-          {!ollamaOk && status?.ollama?.hint && (
+          {!ollamaOk && ollamaRequired && status?.ollama?.hint && (
             <div className="small" style={{ marginTop: 10 }}>
               Fix: {status.ollama.hint}
             </div>
           )}
+          {!ollamaRequired && aiConfig?.hint ? (
+            <div className="small" style={{ marginTop: 10, opacity: 0.88 }}>
+              {aiConfig.hint}
+            </div>
+          ) : null}
         </div>
 
         <div className="card">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div style={{ fontWeight: 800 }}>2) AI Model</div>
-            <Badge ok={modelOk} label={modelOk ? "Ready" : "Not pulled"} />
+            <Badge ok={modelRequired ? modelOk : true} label={modelRequired ? (modelOk ? "Ready" : "Not pulled") : (modelOk ? "Available" : "Optional")} />
           </div>
           <div className="small" style={{ marginTop: 6 }}>
-            Default model: <code>{status?.ollama?.model ?? "(unknown)"}</code>
+            {modelRequired
+              ? <>Default Ollama model: <code>{status?.ollama?.model ?? "(unknown)"}</code></>
+              : <>The active AI path is <b>{aiLabel}</b>, so pulling an Ollama model is optional.</>}
           </div>
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
