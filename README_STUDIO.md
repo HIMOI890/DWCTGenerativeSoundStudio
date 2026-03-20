@@ -20,6 +20,7 @@ From the repo root:
 That launcher keeps the Studio product aligned with the same `Studio Home`, backend port,
 and runtime data that the in-app Setup page uses.
 The Studio backend install/build path now targets EDMG Core as part of the same backend bundle, the packaged Studio app bundles FFmpeg for the internal renderer, and Ollama plus ComfyUI remain external tools.
+The packaged Windows installer is now configured as an assisted installer so the app install location can be chosen explicitly, while `Studio Home` remains the separate root for heavy runtime data on `D:\` or another drive.
 
 ## Quick start (dev)
 

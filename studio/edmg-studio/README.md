@@ -40,6 +40,7 @@ npm run dev
 
 When you install the packaged app, EDMG Studio includes an in-app **Setup Wizard** (Sidebar → **Setup**) that:
 
+- Uses an assisted Windows installer, so you can choose the **app install directory** instead of being forced into the default `C:\` path
 - Lets you choose a **Studio Home** folder before large downloads, so project data, Electron data, ComfyUI Portable, and caches can live on `D:\...`
 - Checks **Ollama** availability (local AI)
 - Lets you **pull the default model** via a button
@@ -47,6 +48,10 @@ When you install the packaged app, EDMG Studio includes an in-app **Setup Wizard
 - Verifies **FFmpeg** for MP4 assembly, preferring the Studio-bundled binary when present
 
 This keeps the runtime UX like a DAW/game installer: click buttons, no terminal required.
+
+Install/storage split:
+- **Install directory**: where the packaged app itself is installed
+- **Studio Home**: where projects, caches, Electron session data, portable tools, and large runtime payloads live
 
 ## Ports
 - Studio backend: **7863**

@@ -31,6 +31,8 @@ class NodeStatus:
     # supported checkpoints (optional config hints)
     checkpoints: set[str] = field(default_factory=set)
     checkpoint_regex: list[re.Pattern] = field(default_factory=list)
+    detected_checkpoints: set[str] = field(default_factory=set)
+    detected_checkpoints_known: bool = False
 
 
 class ComfyUINodePool:
@@ -105,6 +107,8 @@ class ComfyUINodePool:
                         "capabilities": {
                             "node_classes_sample": sorted(list(n.node_classes))[:25],
                             "node_classes_count": len(n.node_classes),
+                            "detected_checkpoints_known": n.detected_checkpoints_known,
+                            "detected_checkpoints_sample": sorted(list(n.detected_checkpoints))[:25],
                         },
                     }
                 )
@@ -158,10 +162,36 @@ class ComfyUINodePool:
         try:
             info = comfy.get_object_info(node.url)
             node.node_classes = set((info or {}).keys())
+            ckpt_names, known = self._extract_checkpoint_names(info)
+            node.detected_checkpoints = ckpt_names
+            node.detected_checkpoints_known = known
             node.caps_error = None
         except Exception as e:
             node.caps_error = str(e)
             node.node_classes = set()
+            node.detected_checkpoints = set()
+            node.detected_checkpoints_known = False
+
+    @staticmethod
+    def _extract_checkpoint_names(object_info: dict[str, Any] | None) -> tuple[set[str], bool]:
+        info = object_info or {}
+        loader = info.get("CheckpointLoaderSimple")
+        if not isinstance(loader, dict):
+            return set(), False
+        input_info = loader.get("input")
+        if not isinstance(input_info, dict):
+            return set(), False
+        required = input_info.get("required")
+        if not isinstance(required, dict):
+            return set(), False
+        ckpt_field = required.get("ckpt_name")
+        if not isinstance(ckpt_field, list) or not ckpt_field:
+            return set(), False
+        options = ckpt_field[0]
+        if not isinstance(options, list):
+            return set(), False
+        names = {str(item).strip() for item in options if str(item).strip()}
+        return names, True
 
     # -------------------------
     # Matching / scoring
@@ -183,6 +213,8 @@ class ComfyUINodePool:
         ck = str(checkpoint_name).strip()
         if not ck:
             return True
+        if node.detected_checkpoints_known:
+            return ck in node.detected_checkpoints
         if node.checkpoints and ck in node.checkpoints:
             return True
         if node.checkpoints:
@@ -202,15 +234,16 @@ class ComfyUINodePool:
 
         # required ComfyUI node classes
         req_nodes = set([n.strip() for n in self._norm_list(requirements.get("node_classes")) if n.strip()])
-        if req_nodes:
-            # ensure we have a fresh-enough cache if possible
+        ckpt = requirements.get("checkpoint")
+        if req_nodes or ckpt:
+            # ensure we have a fresh-enough cache when node classes or checkpoint compatibility matter
             self._refresh_caps_if_needed(node)
+        if req_nodes:
             missing = req_nodes - node.node_classes
             if missing:
                 reasons.append(f"missing_node_classes={sorted(list(missing))}")
 
         # checkpoint compatibility
-        ckpt = requirements.get("checkpoint")
         if not self._supports_checkpoint(node, ckpt):
             reasons.append("checkpoint_unsupported")
 

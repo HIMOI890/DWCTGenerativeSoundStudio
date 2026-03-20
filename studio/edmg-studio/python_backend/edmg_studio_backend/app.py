@@ -918,12 +918,13 @@ def setup_status():
 
     # ComfyUI availability
     try:
-        diag = comfy_pool.diagnose({})
+        diag = comfy_pool.diagnose({"checkpoint": settings.comfyui_checkpoint})
         comfy_ok = bool(diag.get("compatible") or diag.get("busy_compatible"))
         comfy_hint = None if comfy_ok else "Install and start ComfyUI (Portable) or ComfyUI Desktop, then ensure it is reachable at the configured URL(s)."
         comfy_status = {
             "ok": comfy_ok,
             "url": settings.resolved_comfyui_urls()[0] if settings.resolved_comfyui_urls() else settings.comfyui_url,
+            "checkpoint": settings.comfyui_checkpoint,
             "diagnose": diag,
             "portable_installed": comfy_portable_installed(settings.data_dir),
             "hint": comfy_hint,
@@ -932,6 +933,7 @@ def setup_status():
         comfy_status = {
             "ok": False,
             "url": settings.comfyui_url,
+            "checkpoint": settings.comfyui_checkpoint,
             "portable_installed": comfy_portable_installed(settings.data_dir),
             "error": str(e),
             "hint": "Configure EDMG_COMFYUI_URL to a running ComfyUI instance, or install ComfyUI Portable via this wizard.",

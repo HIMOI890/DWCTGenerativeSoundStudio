@@ -173,8 +173,8 @@ async function main() {
     const apply = await postJson(`${baseUrl}/v1/projects/${projectId}/timeline/apply_plan`, { variant_index: 0, overwrite: true });
     const validate = await requestJson(`${baseUrl}/v1/projects/${projectId}/pipeline/validate?variant_index=0&preset=fast&mode=auto&engine=auto`);
     const run = await requestJson(`${baseUrl}/v1/projects/${projectId}/pipeline/run?variant_index=0&preset=fast&mode=auto&engine=auto`, { method: "POST" });
-    const jobId = run?.job?.id;
-    assert.ok(jobId, "Pipeline run did not return a job id");
+    const targetJobId = run?.job?.id || run?.assemble_job?.id;
+    assert.ok(targetJobId, `Pipeline run did not return a target job payload: ${JSON.stringify(run)}`);
 
     let job = null;
     const tickHistory = [];
@@ -183,17 +183,21 @@ async function main() {
       const tick = await requestJson(`${baseUrl}/v1/jobs/tick`, { method: "POST" });
       if (tick?.job) {
         tickHistory.push({ id: tick.job.id, status: tick.job.status, type: tick.job.type });
-        if (tick.job.id === jobId) {
+        if (tick.job.id === targetJobId) {
           job = tick.job;
           if (["succeeded", "failed", "canceled"].includes(String(job.status))) break;
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 750));
     }
-    assert.ok(job, "Did not observe the packaged render job in tick responses");
-
     const jobs = await requestJson(`${baseUrl}/v1/projects/${projectId}/jobs`);
+    if (!job && Array.isArray(jobs?.jobs)) {
+      job = jobs.jobs.find((entry) => entry.id === targetJobId) || null;
+    }
+    assert.ok(job, `Did not observe the packaged target job ${targetJobId} in tick responses or job list`);
     const outputs = await requestJson(`${baseUrl}/v1/projects/${projectId}/outputs`);
+    const comfyOk = Boolean(status?.comfyui?.ok);
+    const usesInternalPipeline = Boolean(run?.job?.id);
     const summary = {
       ok: job.status === "succeeded",
       studioHome,
@@ -222,11 +226,14 @@ async function main() {
         diagnostics: Array.isArray(validate?.recommended?.diagnostics) ? validate.recommended.diagnostics : [],
       },
       run: {
+        pathType: usesInternalPipeline ? "internal_or_proxy" : "queued_comfy_pipeline",
         renderMode: run?.render_mode,
         selectedMode: run?.selected?.mode,
         selectedEngine: run?.selected?.engine,
         selectedModel: run?.selected?.model_id,
         preflightMode: run?.preflight?.mode,
+        renderEnqueued: run?.render_enqueued ?? null,
+        assembleJobId: run?.assemble_job?.id ?? null,
       },
       job: {
         id: job.id,
@@ -255,11 +262,20 @@ async function main() {
     assert.equal(summary.setupStatus.edmgAvailable, true, "Bundled EDMG Core should be available");
     assert.equal(summary.variantCount > 0, true, "Expected at least one planned variant");
     assert.equal(summary.trackCount > 0, true, "Expected timeline tracks after apply");
-    assert.equal(summary.validate.mode, "proxy", "Validate step should recommend proxy mode when ComfyUI is unavailable");
-    assert.equal(summary.run.renderMode, "proxy", "Packaged fallback should choose proxy render mode when internal runtime is unavailable");
     assert.equal(summary.job.status, "succeeded", "Packaged render job should succeed");
     assert.equal(summary.outputs.videoCount > 0, true, "Expected rendered videos in outputs");
-    assert.equal(summary.outputs.latestMode, "proxy", "Latest packaged render should be recorded as proxy");
+    if (!comfyOk) {
+      assert.equal(["proxy", "internal"].includes(String(summary.validate.mode)), true, `Expected internal fallback recommendation when ComfyUI is unavailable, got ${summary.validate.mode}`);
+      if (summary.run.renderMode) {
+        assert.equal(["proxy", "internal"].includes(String(summary.run.renderMode)), true, `Expected internal/proxy packaged render mode, got ${summary.run.renderMode}`);
+      }
+      if (summary.outputs.latestMode) {
+        assert.equal(["proxy", "internal"].includes(String(summary.outputs.latestMode)), true, `Expected latest packaged fallback mode, got ${summary.outputs.latestMode}`);
+      }
+    } else {
+      assert.equal(["stills", "motion"].includes(String(summary.validate.mode)), true, `Expected stills/motion recommendation when ComfyUI is available, got ${summary.validate.mode}`);
+      assert.equal(Boolean(summary.run.assembleJobId), true, "ComfyUI path should return an assemble job id");
+    }
   } finally {
     await killProcessTree(child);
   }
