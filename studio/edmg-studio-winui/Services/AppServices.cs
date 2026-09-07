@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Http;
+using System.Text;
 using EdmgStudio.Core.Services;
 using EdmgStudio.Core.Media;
 using EdmgStudio.WinUI.Graphics;
@@ -9,18 +12,21 @@ public sealed class AppServices : IAsyncDisposable
     private readonly object _previewSessionsSync = new();
     private readonly HashSet<PreviewRendererSession> _previewSessions = [];
     private readonly HashSet<VideoPlaybackSession> _videoPlaybackSessions = [];
+    private readonly HttpClient _apiHttpClient;
     private bool _isDisposing;
 
     private AppServices(
         BackendConfiguration configuration,
         BackendSupervisor backendSupervisor,
         StudioApiClient apiClient,
+        HttpClient apiHttpClient,
         StudioProjectMediaClient projectMediaClient,
         StudioSessionService session)
     {
         Configuration = configuration;
         BackendSupervisor = backendSupervisor;
         ApiClient = apiClient;
+        _apiHttpClient = apiHttpClient;
         ProjectMediaClient = projectMediaClient;
         Session = session;
     }
@@ -90,6 +96,23 @@ public sealed class AppServices : IAsyncDisposable
         }
 
         var supervisor = new BackendSupervisor(configuration);
+
+        // Convert transport-level connection failures into a normal HTTP 503 response.
+        // StudioApiClient already converts non-success HTTP responses into StudioApiException,
+        // which the WinUI pages know how to display without letting an async event handler
+        // crash the shell when the local backend is still starting or temporarily offline.
+        var apiHttpClient = new HttpClient(new BackendAvailabilityHandler())
+        {
+            Timeout = Timeout.InfiniteTimeSpan
+        };
+        var apiClient = new StudioApiClient(supervisor, tokenProvider, apiHttpClient);
+
+        return new AppServices(
+            configuration,
+            supervisor,
+            apiClient,
+            apiHttpClient,
+            new StudioSessionService());
         var apiClient = new StudioApiClient(supervisor, tokenProvider);
         var projectMediaClient = new StudioProjectMediaClient(apiClient, new StudioApiSignedMediaUrlResolver(apiClient));
         return new AppServices(configuration, supervisor, apiClient, projectMediaClient, new StudioSessionService());
@@ -165,9 +188,52 @@ public sealed class AppServices : IAsyncDisposable
             (failures ??= []).Add(exception);
         }
 
+        try
+        {
+            _apiHttpClient.Dispose();
+        }
+        catch (Exception exception)
+        {
+            (failures ??= []).Add(exception);
+        }
+
         if (failures is not null)
         {
             throw new AggregateException("One or more application services failed to shut down cleanly.", failures);
+        }
+    }
+}
+
+internal sealed class BackendAvailabilityHandler : DelegatingHandler
+{
+    public BackendAvailabilityHandler()
+        : base(new SocketsHttpHandler())
+    {
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            CrashLogger.Write(
+                $"Studio API transport could not reach {request.RequestUri}; returning a nonfatal 503 response.",
+                exception);
+
+            var body =
+                "{\"error\":{\"code\":\"BACKEND_UNAVAILABLE\",\"message\":\"Studio backend is unavailable.\",\"hint\":\"Wait for the managed backend to finish starting, then retry.\"}}";
+
+            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            {
+                RequestMessage = request,
+                ReasonPhrase = "Studio backend unavailable",
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
         }
     }
 }

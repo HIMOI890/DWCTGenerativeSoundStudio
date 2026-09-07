@@ -14,6 +14,8 @@ public sealed class WindowsBackendTokenProvider : IBackendTokenProvider
     private readonly IBackendTokenProvider _fallback;
     private readonly SemaphoreSlim _vaultGate = new(1, 1);
 
+    private bool _vaultChecked;
+    private string? _cachedVaultToken;
     private readonly TokenCacheEntry _vaultTokenCache = s_cacheCoordinator.CreateEntry();
 
     public WindowsBackendTokenProvider(IBackendTokenProvider fallback)
@@ -29,6 +31,9 @@ public sealed class WindowsBackendTokenProvider : IBackendTokenProvider
             return environmentToken;
         }
 
+        if (_vaultChecked)
+        {
+            return _cachedVaultToken;
         if (_vaultTokenCache.TryGet(out string? cachedVaultToken))
         {
             return cachedVaultToken;
@@ -37,6 +42,9 @@ public sealed class WindowsBackendTokenProvider : IBackendTokenProvider
         await _vaultGate.WaitAsync(cancellationToken);
         try
         {
+            if (_vaultChecked)
+            {
+                return _cachedVaultToken;
             if (_vaultTokenCache.TryGet(out cachedVaultToken))
             {
                 return cachedVaultToken;
@@ -44,6 +52,11 @@ public sealed class WindowsBackendTokenProvider : IBackendTokenProvider
 
             try
             {
+                var credential = new PasswordVault().Retrieve(VaultResource, VaultUser);
+                credential.RetrievePassword();
+                _cachedVaultToken = string.IsNullOrWhiteSpace(credential.Password)
+                    ? null
+                    : credential.Password;
                 cachedVaultToken = ResolveStore().ReadToken();
             }
             catch
@@ -52,6 +65,11 @@ public sealed class WindowsBackendTokenProvider : IBackendTokenProvider
                 // require authentication. Cache that result so every HTTP request
                 // does not repeatedly ask PasswordVault and trigger a first-chance
                 // COMException in the Visual Studio debugger.
+                _cachedVaultToken = null;
+            }
+
+            _vaultChecked = true;
+            return _cachedVaultToken;
                 cachedVaultToken = null;
             }
 
