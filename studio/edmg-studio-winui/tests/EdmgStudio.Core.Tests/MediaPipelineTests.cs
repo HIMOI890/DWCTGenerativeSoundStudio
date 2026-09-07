@@ -254,7 +254,9 @@ public sealed class MediaPipelineTests
     }
 
     [TestMethod]
-    public async Task PlaybackCreationEnforcesConfiguredLimitWhenContentLengthUnderReports()
+    [DataRow(4L)]
+    [DataRow(null)]
+    public async Task PlaybackCreationEnforcesConfiguredLimitWhenContentLengthUnderReports(long? contentLength)
     {
         using var temporaryDirectory = new TemporaryDirectory();
         using var spoolLimit = new EnvironmentVariableScope("EDMG_STUDIO_VIDEO_SPOOL_MAX_BYTES", "8");
@@ -266,7 +268,7 @@ public sealed class MediaPipelineTests
                 source,
                 decoder,
                 temporaryDirectory.Path,
-                knownContentLength: 4,
+                knownContentLength: contentLength,
                 cancellationToken: CancellationToken.None));
 
         Assert.IsTrue(source.RequestedBufferSizes.Count >= 2);
@@ -274,6 +276,7 @@ public sealed class MediaPipelineTests
         Assert.IsEmpty(Directory.GetFiles(temporaryDirectory.Path));
     }
 
+    [TestMethod]
     public async Task PlaybackReplacementCancelsPriorDecodeAndDisposalDeletesSpool()
     {
         using var temporaryDirectory = new TemporaryDirectory();

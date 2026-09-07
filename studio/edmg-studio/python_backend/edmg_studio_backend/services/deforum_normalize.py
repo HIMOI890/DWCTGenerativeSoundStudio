@@ -247,7 +247,7 @@ def operational_render_prompt_from_scene(
             clauses.append(f"{continuity_excerpt}.")
 
     if not clauses:
-        source = _clean_text(scene.get("prompt") or scene.get("prompt_pack") or fallback)
+        source = render_prompt_from_scene(scene, fallback=fallback)
         return limit_prompt_words(source or fallback, max_words=max_words)
     return limit_prompt_words(" ".join(clauses), max_words=max_words)
 

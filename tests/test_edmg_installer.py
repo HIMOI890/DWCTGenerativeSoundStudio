@@ -281,6 +281,7 @@ def test_install_fails_for_mismatched_requested_python(
     venv_dir = tmp_path / "standalone-env"
 
     monkeypatch.setattr(module, "_resolve_uv", lambda env=None: uv_bin)
+    monkeypatch.setattr(module, "_resolve_requested_python", lambda *args, **kwargs: module._venv_python(venv_dir))
     monkeypatch.setattr(
         module, "_ensure_venv", lambda *args, **kwargs: module._venv_python(venv_dir)
     )

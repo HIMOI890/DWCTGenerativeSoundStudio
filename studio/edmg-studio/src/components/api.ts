@@ -5,6 +5,8 @@ export const BACKEND_URL_CHANGED_EVENT = "edmg:backend-url-changed";
 const BROWSER_BACKEND_URL_STORAGE_KEY = "edmg.backendUrl";
 let backendAuthToken = "";
 let backendAuthTokenLoaded = false;
+let backendAuthTokenGeneration = 0;
+let backendAuthTokenPending: Promise<string> | null = null;
 const projectRevisions = new Map<string, number>();
 
 async function trackProjectRevision(response: Response, base: string, path: string): Promise<Response> {
@@ -102,6 +104,8 @@ export function isRequestAbortError(error: unknown): boolean {
 }
 
 export function setBackendAuthTokenForSession(value: string): string {
+  backendAuthTokenGeneration += 1;
+  backendAuthTokenPending = null;
   backendAuthToken = String(value || "").trim();
   backendAuthTokenLoaded = true;
   return backendAuthToken;
@@ -113,16 +117,23 @@ export function hasBackendAuthToken(): boolean {
 
 export async function getBackendAuthTokenAsync(): Promise<string> {
   if (backendAuthTokenLoaded) return backendAuthToken;
-  backendAuthTokenLoaded = true;
+  if (backendAuthTokenPending) return backendAuthTokenPending;
   if (typeof window === "undefined") return "";
-  try {
-    const result = await window.edmg?.getBackendAuthToken?.();
-    const token = typeof result === "string" ? result : String(result?.token || "");
-    backendAuthToken = token.trim();
-  } catch {
-    backendAuthToken = "";
-  }
-  return backendAuthToken;
+  const generation = backendAuthTokenGeneration;
+  backendAuthTokenPending = (async () => {
+    let token = "";
+    try {
+      const result = await window.edmg?.getBackendAuthToken?.();
+      token = (typeof result === "string" ? result : String(result?.token || "")).trim();
+    } catch { /* A missing credential is cached until explicitly changed. */ }
+    if (generation === backendAuthTokenGeneration) {
+      backendAuthToken = token;
+      backendAuthTokenLoaded = true;
+      backendAuthTokenPending = null;
+    }
+    return backendAuthToken;
+  })();
+  return backendAuthTokenPending;
 }
 
 export async function saveBackendAuthToken(value: string): Promise<{

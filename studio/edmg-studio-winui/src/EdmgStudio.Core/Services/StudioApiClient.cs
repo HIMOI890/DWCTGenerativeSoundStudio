@@ -150,6 +150,7 @@ public sealed class StudioApiClient : IDisposable
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
             .ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        RememberRevision(response);
     }
 
     public Task<AnalysisResponse> AnalyzeAudioAsync(string projectId, CancellationToken cancellationToken = default) =>
@@ -1197,6 +1198,7 @@ public sealed class StudioApiClient : IDisposable
         SignedMediaUrlRequest request,
         CancellationToken cancellationToken = default)
     {
+        var issuanceBackend = _endpointProvider.CurrentBackendUri;
         SignedMediaUrlRequest normalizedRequest = NormalizeSignedMediaUrlRequest(request);
         SignedMediaUrlBatchResponse response = await GetProjectMediaUrlsAsync(
                 projectId,
@@ -1210,7 +1212,9 @@ public sealed class StudioApiClient : IDisposable
             throw new InvalidOperationException("Studio returned a signed media URL for an unexpected purpose.");
         }
 
-        return ResolveStreamTarget(resolved.Url);
+        if (issuanceBackend != _endpointProvider.CurrentBackendUri)
+            throw new OperationCanceledException("The Studio backend changed during media URL issuance.");
+        return ResolveStreamTarget(resolved.Url, issuanceBackend);
     }
 
     public async Task<TResult> StreamProjectPreviewFileAsync<TResult>(
@@ -1268,6 +1272,7 @@ public sealed class StudioApiClient : IDisposable
                 cancellationToken)
             .ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        RememberRevision(response);
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         var scopedFile = new StudioFileStream(
@@ -1300,6 +1305,7 @@ public sealed class StudioApiClient : IDisposable
                 cancellationToken)
             .ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        RememberRevision(response);
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         var scopedFile = new StudioFileStream(
@@ -1557,6 +1563,9 @@ public sealed class StudioApiClient : IDisposable
 
     public Task<JsonElement> GetHardwareAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/hardware", null, true, cancellationToken);
+
+    public Task<JsonElement> GetSecurityStatusAsync(CancellationToken cancellationToken = default) =>
+        SendJsonElementAsync(HttpMethod.Get, "/v1/security/status", null, true, cancellationToken);
 
     public Task<JsonElement> GetSystemReadinessAsync(CancellationToken cancellationToken = default) =>
         SendJsonElementAsync(HttpMethod.Get, "/v1/system/readiness", null, true, cancellationToken);
@@ -1838,6 +1847,7 @@ public sealed class StudioApiClient : IDisposable
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
             .ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        RememberRevision(response);
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         var result = await JsonSerializer.DeserializeAsync(
@@ -1866,6 +1876,7 @@ public sealed class StudioApiClient : IDisposable
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
             .ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        RememberRevision(response);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         RememberRevision(request.RequestUri!, document.RootElement);
@@ -1911,6 +1922,7 @@ public sealed class StudioApiClient : IDisposable
                 cancellationToken)
             .ConfigureAwait(false);
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        RememberRevision(response);
         await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(
                 responseStream,
@@ -1959,6 +1971,7 @@ public sealed class StudioApiClient : IDisposable
         return new SignedMediaUrlRequest
         {
             Purpose = purpose,
+            PreviewKind = request.PreviewKind,
             Path = path,
             Query = request.Query.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
                 ? default
@@ -1966,7 +1979,7 @@ public sealed class StudioApiClient : IDisposable
         };
     }
 
-    private Uri ResolveStreamTarget(string target)
+    private static Uri ResolveStreamTarget(string target, Uri backend)
     {
         string normalizedTarget = RequireValue(target, nameof(target));
         if (Uri.TryCreate(normalizedTarget, UriKind.Absolute, out Uri? absoluteTarget))
@@ -1977,10 +1990,15 @@ public sealed class StudioApiClient : IDisposable
                 throw new InvalidOperationException("Studio signed media URLs must use HTTP or HTTPS.");
             }
 
+            if (!SameOrigin(backend, absoluteTarget))
+                throw new InvalidOperationException("Studio returned a signed media URL for a different origin.");
             return absoluteTarget;
         }
 
-        return new Uri(_endpointProvider.CurrentBackendUri, normalizedTarget);
+        var resolved = new Uri(backend, normalizedTarget);
+        if (!SameOrigin(backend, resolved))
+            throw new InvalidOperationException("Studio returned a signed media URL for a different origin.");
+        return resolved;
     }
 
     internal static bool ShouldFallbackToLegacyProjectFileRoute(StudioApiException exception)
@@ -2002,6 +2020,16 @@ public sealed class StudioApiClient : IDisposable
             data = project;
         if (data.TryGetProperty("revision", out var revision) && revision.TryGetInt64(out long value) && value > 0)
             _projectRevisions[key] = value;
+    }
+
+    private void RememberRevision(HttpResponseMessage response)
+    {
+        var target = response.RequestMessage?.RequestUri;
+        var key = target is null ? null : ProjectRevisionKey(target);
+        if (key is not null && response.Headers.TryGetValues("X-Project-Revision", out var values)
+            && long.TryParse(values.SingleOrDefault(), NumberStyles.None, CultureInfo.InvariantCulture, out var revision)
+            && revision > 0)
+            _projectRevisions[key] = revision;
     }
 
     private async Task<HttpRequestMessage> CreateRequestAsync(

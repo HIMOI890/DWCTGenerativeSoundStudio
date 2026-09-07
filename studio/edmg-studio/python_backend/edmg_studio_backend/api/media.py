@@ -10,6 +10,25 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..preview_limits import PreviewBudgetLimits
 from ..security import configured_media_signer, media_url_ttl_s
 from ..utils.path import safe_join
+from ..project_metadata import validate_metadata_patch
+
+
+def validate_timeline_media(project_dir, timeline):
+    """Reject unsafe stored asset references before any preview decoding or cache hit."""
+    validate_metadata_patch({"timeline": timeline})
+    def visit(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {"asset", "mask_asset", "source_path", "path", "filename"} and isinstance(item, str) and item:
+                    safe_join(project_dir, item)
+                    if key in {"asset", "mask_asset"}:
+                        directory = "masks" if key == "mask_asset" else "overlays"
+                        safe_join(project_dir, f"assets/{directory}/{item}")
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+    visit(timeline)
 
 
 class MediaRequest(BaseModel):
@@ -26,6 +45,10 @@ class MediaBatchRequest(BaseModel):
 
 def validate_preview(kind: str, query: dict[str, Any]) -> None:
     diffusion = kind == "diffusion_segment"
+    if diffusion:
+        cfg, strength = float(query.get("cfg", 7)), float(query.get("strength", 0.45))
+        if not math.isfinite(cfg) or cfg <= 0 or not math.isfinite(strength) or not 0 < strength <= 1:
+            raise ValueError("Preview cfg must be finite and positive; strength must be within (0, 1]")
     limits = PreviewBudgetLimits.from_env(diffusion=diffusion)
     width, height = int(query.get("w", 512 if diffusion else 768)), int(query.get("h", 512 if diffusion else 432))
     if kind == "frame":
@@ -66,6 +89,7 @@ def create_media_router(get_store, security):
                     if query.keys() - allowed:
                         raise ValueError("Unsupported preview parameters")
                     validate_preview(item.preview_kind, query)
+                    validate_timeline_media(store.project_dir(project_id), project.meta.get("timeline") or {})
                     safe_join(store.project_dir(project_id), "outputs/previews")
                 else:
                     if query:

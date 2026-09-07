@@ -258,6 +258,7 @@ def test_audio_upload_endpoint_persists_large_audio_payload(tmp_path, monkeypatc
     with TestClient(studio_app.app) as client:
         response = client.post(
             f"/v1/projects/{proj.id}/assets/audio",
+            data={"expected_revision": str(proj.revision)},
             files={"file": ("long.wav", payload, "audio/wav")},
         )
 

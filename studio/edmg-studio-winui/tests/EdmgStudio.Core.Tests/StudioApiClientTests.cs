@@ -888,7 +888,8 @@ public sealed class StudioApiClientTests
                 new SignedMediaUrlRequest
                 {
                     Purpose = "preview",
-                    Query = JsonSerializer.SerializeToElement(new { t = 1.25, variant_index = 2 })
+                    PreviewKind = "segment",
+                    Query = JsonSerializer.SerializeToElement(new { start_s = 1.25, end_s = 2 })
                 }
             ]);
 
@@ -902,8 +903,9 @@ public sealed class StudioApiClientTests
         using var payload = JsonDocument.Parse(captured.Body);
         JsonElement request = payload.RootElement.GetProperty("requests")[0];
         Assert.AreEqual("preview", request.GetProperty("purpose").GetString());
-        Assert.AreEqual(1.25, request.GetProperty("query").GetProperty("t").GetDouble());
-        Assert.AreEqual(2, request.GetProperty("query").GetProperty("variant_index").GetInt32());
+        Assert.AreEqual("segment", request.GetProperty("preview_kind").GetString());
+        Assert.AreEqual(1.25, request.GetProperty("query").GetProperty("start_s").GetDouble());
+        Assert.AreEqual(2, request.GetProperty("query").GetProperty("end_s").GetInt32());
         Assert.IsFalse(request.TryGetProperty("path", out _));
     }
 
@@ -2034,6 +2036,36 @@ public sealed class StudioApiClientTests
 
     private const string ModelTaskActionJson =
         """{"task":{"id":"task-1","name":"Import TensorRT","status":"queued","progress":0.0,"last_log":null,"error":null,"started_at":null,"ended_at":null,"model_id":"local_sd15_tensorrt_bundle","stage":"queued","bytes_completed":0,"bytes_total":null,"files_completed":0,"files_total":null,"cancel_requested":false}}""";
+
+    [TestMethod]
+    public async Task SignedMediaRejectsCrossOriginIssuance()
+    {
+        using var http = new HttpClient(new RecordingHandler((_, _) => Task.FromResult(JsonResponse(
+            """{"expires_at":1900000000,"urls":[{"purpose":"audio","url":"https://other.example/audio"}]}"""))));
+        using var client = new StudioApiClient(new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("test"), http);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => client.GetProjectMediaUrlAsync(
+            "p1", new SignedMediaUrlRequest { Purpose = "audio" }));
+    }
+
+    [TestMethod]
+    public async Task SignedMediaDiscardsResponseAfterBackendSwitch()
+    {
+        var endpoint = new MutableEndpointProvider();
+        using var http = new HttpClient(new RecordingHandler((_, _) =>
+        {
+            endpoint.CurrentBackendUri = new Uri("http://127.0.0.1:7864/");
+            return Task.FromResult(JsonResponse("""{"expires_at":1900000000,"urls":[{"purpose":"audio","url":"/audio"}]}"""));
+        }));
+        using var client = new StudioApiClient(endpoint, new StaticTokenProvider("test"), http);
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => client.GetProjectMediaUrlAsync(
+            "p1", new SignedMediaUrlRequest { Purpose = "audio" }));
+    }
+
+    private sealed class MutableEndpointProvider : IBackendEndpointProvider
+    {
+        public Uri CurrentBackendUri { get; set; } = new("http://127.0.0.1:7863/");
+    }
 
     private sealed record CapturedRequest(
         HttpMethod Method,

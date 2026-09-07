@@ -81,3 +81,26 @@ def test_preview_budgets_are_separate_and_finite():
                         ("segment", {"w": 2048, "h": 2048, "fps": 12, "end_s": 10})]:
         with pytest.raises(ValueError):
             validate_preview(kind, query)
+
+
+def test_symlink_escape_rejected_at_file_and_compositor_boundaries(tmp_path):
+    from edmg_studio_backend.services.compositor import _load_rgba
+    project = tmp_path / "project"
+    overlays = project / "assets" / "overlays"
+    overlays.mkdir(parents=True)
+    outside = tmp_path / "private.png"
+    outside.write_bytes(b"not an image: must never be decoded")
+    try:
+        (overlays / "escape.png").symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"Symlinks unavailable: {exc}")
+    with pytest.raises(ValueError):
+        safe_join(project, "assets/overlays/escape.png")
+    with pytest.raises(ValueError):
+        _load_rgba(project, kind="overlays", name="escape.png")
+
+
+@pytest.mark.parametrize("field,value", [("cfg", float("nan")), ("cfg", 0), ("strength", float("inf")), ("strength", 1.1)])
+def test_diffusion_scalars_rejected_before_rendering(field, value):
+    with pytest.raises(ValueError):
+        validate_preview("diffusion_segment", {field: value})

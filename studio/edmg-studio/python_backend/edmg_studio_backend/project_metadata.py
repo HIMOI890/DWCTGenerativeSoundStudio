@@ -44,6 +44,11 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def is_server_owned_metadata_field(key: str) -> bool:
+    normalized = key.casefold()
+    return normalized in SERVER_OWNED_METADATA_FIELDS or normalized.endswith(("_path", "_dir", "_filename"))
+
+
 @dataclass(frozen=True)
 class MetadataPatchLimits:
     max_depth: int
@@ -119,7 +124,7 @@ def validate_metadata_patch(
     resolved_limits = limits or MetadataPatchLimits.from_env()
     try:
         encoded = json.dumps(patch, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise MetadataValidationError(f"{label} must be JSON-serializable.") from exc
     if len(encoded.encode("utf-8")) > resolved_limits.max_bytes:
         raise MetadataValidationError(
@@ -135,13 +140,23 @@ def validate_metadata_patch(
     return patch
 
 
+def merge_metadata_values(current: Any, patch: Any) -> Any:
+    """Merge JSON objects recursively; arrays and scalar values replace explicitly."""
+    if not isinstance(current, dict) or not isinstance(patch, dict):
+        return deepcopy(patch)
+    merged = deepcopy(current)
+    for key, value in patch.items():
+        merged[key] = merge_metadata_values(merged.get(key), value)
+    return merged
+
+
 def extract_recoverable_metadata(meta: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(meta, dict):
         return {}
     return {
         str(key): deepcopy(value)
         for key, value in meta.items()
-        if str(key) not in SERVER_OWNED_METADATA_FIELDS
+        if not is_server_owned_metadata_field(str(key))
     }
 
 
@@ -153,13 +168,13 @@ def recoverable_metadata_from_patch(
     if not isinstance(patch, dict):
         return base, []
     ignored = sorted(
-        {str(key) for key in patch.keys() if str(key) in SERVER_OWNED_METADATA_FIELDS}
+        {str(key) for key in patch.keys() if is_server_owned_metadata_field(str(key))}
     )
     for key, value in patch.items():
         key_str = str(key)
-        if key_str in SERVER_OWNED_METADATA_FIELDS:
+        if is_server_owned_metadata_field(key_str):
             continue
-        base[key_str] = deepcopy(value)
+        base[key_str] = merge_metadata_values(base.get(key_str), value)
     return base, ignored
 
 
@@ -171,14 +186,14 @@ def merge_recovery_metadata(
     current = current_meta if isinstance(current_meta, dict) else {}
     recovered = recovered_meta if isinstance(recovered_meta, dict) else {}
     for key, value in current.items():
-        if str(key) in SERVER_OWNED_METADATA_FIELDS:
+        if is_server_owned_metadata_field(str(key)):
             merged[str(key)] = deepcopy(value)
     ignored = sorted(
-        {str(key) for key in recovered.keys() if str(key) in SERVER_OWNED_METADATA_FIELDS}
+        {str(key) for key in recovered.keys() if is_server_owned_metadata_field(str(key))}
     )
     for key, value in recovered.items():
         key_str = str(key)
-        if key_str in SERVER_OWNED_METADATA_FIELDS:
+        if is_server_owned_metadata_field(key_str):
             continue
-        merged[key_str] = deepcopy(value)
+        merged[key_str] = merge_metadata_values(merged.get(key_str), value)
     return merged, ignored

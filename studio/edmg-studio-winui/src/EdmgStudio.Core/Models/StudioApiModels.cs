@@ -208,6 +208,10 @@ public sealed class SignedMediaUrlBatchRequest
 
 public sealed class SignedMediaUrlRequest
 {
+    [JsonPropertyName("preview_kind")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PreviewKind { get; init; }
+
     [JsonPropertyName("purpose")]
     public string Purpose { get; init; } = string.Empty;
 

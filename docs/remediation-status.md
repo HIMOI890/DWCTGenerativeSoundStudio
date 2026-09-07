@@ -29,3 +29,21 @@ Focused revision/timeline/TensorRT rerun: 84 passed / 2 old cancellation expecta
 Fresh initial hardware inspection: RTX 4050 Laptop GPU, 6141 MiB VRAM (10 MiB used), NVIDIA driver 610.88. Pagefile allocation 65536 MiB; no backend process was observed. Model readiness and actual CUDA temporal generation remain unverified.
 
 Detailed temporary test logs are under `C:\DWCT-Temp\remediation-*.log`. Final report will distinguish passed checks, baseline/environment failures, introduced regressions, and unverified acceptance criteria.
+
+## Second checkpoint (user requested commit and push, then continue)
+
+First checkpoint `f902a28fad6e988444edfa37cd8180a3d7bbff8e` was pushed and verified equal to the remote branch.
+
+Additional integration: native signed-media origin and backend-switch checks; preview-kind contract; response-header revision capture; native security/limit diagnostics; Electron shared token lookup with invalidation protection; recursive metadata merging; compositor asset containment; finite diffusion scalar validation; preview cache and timeline containment; canceled terminal responses; concrete planner-text fallback.
+
+Verification since first checkpoint:
+- Backend full package: 532 passed with installed FFmpeg 8.1.1 on test-process PATH (`remediation-backend-ffmpeg.log`).
+- Repository scope: exit 0, 149 passed / 4 intentionally gated live-model tests skipped (`remediation-repo-final.log`).
+- WinUI Core: 262 passed, including unknown-length spool bounds, playback replacement cleanup, cross-origin issuance, and backend switching (`remediation-native-expanded.log`).
+- Electron focused media/API: 18 passed, including failed renewal/retry, active playback restoration, unmount cancellation, and superseded backend responses.
+- Electron lint and typecheck: exit 0.
+- Go support: exit 0.
+- Git Bash syntax checks: ComfyUI, Ollama, HF bucket, S3 cache setup scripts exit 0; installers were not executed.
+- Latest backend contract selection: 23 passed, including symlink escape rejection and nested metadata preservation. Additional preview entrypoint wiring after that selection requires a final rerun.
+
+The repository scope helper performed its documented frozen CPU sync and removed the optional ruff package from that test environment. No dependency inputs were changed to suppress a failure. The source runtime reports torch 2.11.0+cpu and CUDA unavailable; installed model folders alone do not establish CUDA proof readiness. Real temporal MP4 proof remains unverified, with no generation claimed.

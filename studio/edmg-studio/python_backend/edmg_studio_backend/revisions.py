@@ -58,7 +58,10 @@ class RevisionRoute(APIRoute):
             supplied = request.headers.get("if-match")
             content_type = request.headers.get("content-type", "")
             if "application/json" in content_type:
-                body = await request.json()
+                try:
+                    body = await request.json()
+                except (ValueError, UnicodeDecodeError) as exc:
+                    raise HTTPException(422, "Request body must be valid JSON") from exc
                 if isinstance(body, dict):
                     supplied = body.get("expected_revision") if body.get("expected_revision") is not None else supplied
             elif "multipart/form-data" in content_type:

@@ -10,6 +10,15 @@ from edmg_studio_backend.store.jobs import JobStore
 from edmg_studio_backend import app as backend
 
 
+def test_metadata_patch_and_recovery_preserve_nested_unrelated_values():
+    from edmg_studio_backend.project_metadata import recoverable_metadata_from_patch, merge_recovery_metadata
+    current = {"workspace": {"notes": "keep", "zoom": 1}, "audio": {"filename": "owned.wav"}}
+    patch, ignored = recoverable_metadata_from_patch(current, {"workspace": {"zoom": 2}})
+    assert not ignored
+    recovered, ignored = merge_recovery_metadata(current, patch)
+    assert recovered == {"workspace": {"notes": "keep", "zoom": 2}, "audio": {"filename": "owned.wav"}}
+
+
 def test_autosave_requires_revision_rejects_reserved_fields_and_merges_recovery(tmp_path):
     store = ProjectStore(tmp_path)
     project = store.create("Revisions")

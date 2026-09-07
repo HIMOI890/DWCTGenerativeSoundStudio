@@ -288,7 +288,7 @@ class BackendSecurityMiddleware:
 
         if self.settings.auth_required and not _is_public_request(path, method, self.settings) and not (signed and signed.ok):
             supplied = _bearer_token(list(scope.get("headers") or []))
-            if not supplied or not hmac.compare_digest(supplied, self.settings.auth_token):
+            if not supplied or not hmac.compare_digest(supplied.encode("utf-8"), self.settings.auth_token.encode("utf-8")):
                 response = JSONResponse(
                     status_code=401,
                     headers={"WWW-Authenticate": "Bearer"},

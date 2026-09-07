@@ -348,7 +348,7 @@ backend_security = BackendSecuritySettings.from_env()
 app = FastAPI(title="EDMG Studio Backend", version=STUDIO_VERSION, lifespan=_app_lifespan)
 from .revisions import RevisionRoute
 app.router.route_class = RevisionRoute
-from .api.media import create_media_router, validate_preview
+from .api.media import create_media_router, validate_preview, validate_timeline_media
 app.include_router(create_media_router(lambda: store, backend_security))
 
 app.add_middleware(BackendSecurityMiddleware, settings=backend_security)
@@ -3821,7 +3821,22 @@ def _validate_preview_request(kind: str, query: dict[str, Any]) -> None:
         raise HTTPException(400, str(exc)) from exc
 
 
-@app.api_route("/v1/projects/{project_id}/preview/frame", methods=["GET", "HEAD"])
+def _preview_path(project_dir: Path, relative: str) -> Path:
+    try:
+        return safe_join(project_dir, relative)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def _validate_preview_timeline(project_dir: Path, timeline: dict) -> None:
+    try:
+        validate_timeline_media(project_dir, timeline)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.head("/v1/projects/{project_id}/preview/frame", include_in_schema=False)
+@app.get("/v1/projects/{project_id}/preview/frame")
 def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, force: int = 0):
     """Render a low-res cached preview frame for timeline scrubbing (no diffusion)."""
     _validate_preview_request("frame", {"t": t, "w": w, "h": h})
@@ -3830,6 +3845,7 @@ def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, f
         raise HTTPException(404, "Project not found")
     pdir = store.project_dir(project_id)
     timeline = proj.meta.get("timeline") or {}
+    _validate_preview_timeline(pdir, timeline)
 
     try:
         from PIL import Image  # type: ignore
@@ -3837,10 +3853,10 @@ def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, f
         logger.exception("Preview image dependency is unavailable")
         raise HTTPException(500, "Preview image dependency is unavailable") from exc
 
-    cache_dir = safe_join(pdir, f"outputs/previews/{int(w)}x{int(h)}")
+    cache_dir = _preview_path(pdir, f"outputs/previews/{int(w)}x{int(h)}")
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = f"t{int(float(t) * 1000):010d}.png"
-    out = cache_dir / key
+    out = _preview_path(cache_dir, key)
 
     if out.exists() and not force:
         return FileResponse(str(out), media_type="image/png")
@@ -3854,7 +3870,8 @@ def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, f
     
 
     return FileResponse(str(out), media_type="image/png")
-@app.api_route("/v1/projects/{project_id}/preview/segment", methods=["GET", "HEAD"])
+@app.head("/v1/projects/{project_id}/preview/segment", include_in_schema=False)
+@app.get("/v1/projects/{project_id}/preview/segment")
 def preview_segment(
     project_id: str,
     start_s: float = 0.0,
@@ -3878,6 +3895,7 @@ def preview_segment(
         raise HTTPException(404, "Project not found")
     pdir = store.project_dir(project_id)
     timeline = proj.meta.get("timeline") or {}
+    _validate_preview_timeline(pdir, timeline)
 
     try:
         from PIL import Image, ImageDraw, ImageFont  # type: ignore
@@ -3892,15 +3910,15 @@ def preview_segment(
     fps_i = max(1, min(24, int(fps)))
 
     tl_hash = hashlib.sha1(json.dumps(timeline, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:10]
-    cache_dir = safe_join(pdir, f"outputs/previews/seg_{int(w)}x{int(h)}")
+    cache_dir = _preview_path(pdir, f"outputs/previews/seg_{int(w)}x{int(h)}")
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = f"seg_{int(start*1000):010d}_{int(end*1000):010d}_{fps_i}fps_{tl_hash}.mp4"
-    out_mp4 = cache_dir / key
+    out_mp4 = _preview_path(cache_dir, key)
 
     if out_mp4.exists() and not force:
         return FileResponse(str(out_mp4), media_type="video/mp4")
 
-    frames_dir = cache_dir / f"_tmp_{out_mp4.stem}"
+    frames_dir = _preview_path(cache_dir, f"_tmp_{out_mp4.stem}")
     if frames_dir.exists():
         try:
             for f in frames_dir.glob("*.png"):
@@ -3955,7 +3973,8 @@ def preview_segment(
 
 
 
-@app.api_route("/v1/projects/{project_id}/preview/diffusion_segment", methods=["GET", "HEAD"])
+@app.head("/v1/projects/{project_id}/preview/diffusion_segment", include_in_schema=False)
+@app.get("/v1/projects/{project_id}/preview/diffusion_segment")
 def preview_diffusion_segment(
     project_id: str,
     start_s: float = 0.0,
@@ -3979,12 +3998,13 @@ def preview_diffusion_segment(
       - no audio mux (Timeline page plays audio separately)
       - uses the internal Diffusers engine (SD1.5 / SDXL / SD3.5) if installed
     """
-    _validate_preview_request("diffusion_segment", {"start_s": start_s, "end_s": end_s, "w": w, "h": h, "fps": fps, "steps": steps})
+    _validate_preview_request("diffusion_segment", {"start_s": start_s, "end_s": end_s, "w": w, "h": h, "fps": fps, "steps": steps, "cfg": cfg, "strength": strength})
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
     pdir = store.project_dir(project_id)
     timeline = proj.meta.get("timeline") or {}
+    _validate_preview_timeline(pdir, timeline)
 
     # Scenes from last plan are optional; timeline prompt track takes precedence anyway.
     scenes: list[dict[str, Any]] = []
@@ -4028,11 +4048,11 @@ def preview_diffusion_segment(
     # Cache
     tl_hash = hashlib.sha1(json.dumps(timeline, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:10]
     p_hash = hashlib.sha1((prompt or "").encode("utf-8")).hexdigest()[:8]
-    cache_dir = safe_join(pdir, f"outputs/previews/diff_{w_i}x{h_i}")
+    cache_dir = _preview_path(pdir, f"outputs/previews/diff_{w_i}x{h_i}")
     cache_dir.mkdir(parents=True, exist_ok=True)
     model_cache_token = _cache_key_token(mid)
     key = f"diff_{int(start*1000):010d}_{int(end*1000):010d}_{fps_i}fps_{steps_i}s_{int(cfg*10):03d}c_{int(strength*100):03d}st_{model_cache_token}_{tl_hash}_{p_hash}.mp4"
-    out_mp4 = cache_dir / key
+    out_mp4 = _preview_path(cache_dir, key)
 
     if out_mp4.exists() and not force:
         return FileResponse(str(out_mp4), media_type="video/mp4")
@@ -4100,7 +4120,8 @@ else:
         _require_multipart()
 
 
-@app.api_route("/v1/projects/{project_id}/audio", methods=["GET", "HEAD"])
+@app.head("/v1/projects/{project_id}/audio", include_in_schema=False)
+@app.get("/v1/projects/{project_id}/audio")
 def get_project_audio(project_id: str):
     """Serve the project's primary uploaded audio file (Timeline playback)."""
     proj = store.get(project_id)
@@ -7200,6 +7221,8 @@ def cancel_job(project_id: str, job_id: str):
     job = jobs.cancel(project_id, job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    if job.status != "canceled":
+        raise HTTPException(409, {"code": "JOB_ALREADY_TERMINAL", "message": "The completed job could not be canceled.", "status": job.status})
     return {"ok": True, "job": job.__dict__}
 
 
@@ -13866,7 +13889,8 @@ def list_outputs(project_id: str):
         "active_internal_jobs": active_internal_jobs,
     }
 
-@app.api_route("/v1/projects/{project_id}/file", methods=["GET", "HEAD"])
+@app.head("/v1/projects/{project_id}/file", include_in_schema=False)
+@app.get("/v1/projects/{project_id}/file")
 def get_file(project_id: str, path: str):
     proj = store.get(project_id)
     if not proj:

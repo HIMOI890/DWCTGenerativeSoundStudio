@@ -90,8 +90,9 @@ def _safe_filename(name: str) -> str:
 
 def _load_rgba(project_dir: Path, *, kind: str, name: str) -> "Image.Image":
     _require_pillow()
-    name = _safe_filename(name)
-    p = project_dir / "assets" / kind / name
+    from ..utils.path import safe_join
+    safe_join(project_dir, name)
+    p = safe_join(project_dir, f"assets/{kind}/{name}")
     if not p.exists():
         raise UserFacingError(
             f"Asset not found: {kind}/{name}",

@@ -398,7 +398,8 @@ class JobStore:
                 "message": "Cancel requested — waiting for current step to finish",
             }
         self.save(job)
-        self.append_log(project_id, job_id, "Job canceled")
+        if job.status == "canceled":
+            self.append_log(project_id, job_id, "Job canceled")
         return job
 
     def _transition_status(

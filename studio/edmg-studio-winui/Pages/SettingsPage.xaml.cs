@@ -47,9 +47,12 @@ public sealed partial class SettingsPage : Page
                 ProbeTextAsync("HARDWARE", () => _apiClient.GetHardwareAsync());
             Task<(string Text, string? Error)> metricsTask =
                 ProbeTextAsync("METRICS", () => _apiClient.GetBaselineMetricsAsync());
-            await Task.WhenAll(renderTask, transcriptionTask, secretsTask, readinessTask, hardwareTask, metricsTask);
+            Task<(string Text, string? Error)> securityTask =
+                ProbeTextAsync("SECURITY AND PREVIEW LIMITS", () => _apiClient.GetSecurityStatusAsync());
+            await Task.WhenAll(renderTask, transcriptionTask, secretsTask, readinessTask, hardwareTask, metricsTask, securityTask);
 
             DiagnosticsTextBox.Text =
+                $"{securityTask.Result.Text}{Environment.NewLine}{Environment.NewLine}" +
                 $"{readinessTask.Result.Text}{Environment.NewLine}{Environment.NewLine}" +
                 $"{hardwareTask.Result.Text}{Environment.NewLine}{Environment.NewLine}" +
                 metricsTask.Result.Text;
@@ -63,6 +66,7 @@ public sealed partial class SettingsPage : Page
                 readinessTask.Result.Error,
                 hardwareTask.Result.Error,
                 metricsTask.Result.Error,
+                securityTask.Result.Error,
             ];
             string[] availableFailures = failures.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!).ToArray();
             ShowStatus(
