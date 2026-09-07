@@ -25,6 +25,7 @@ public sealed partial class AiPlannerLabPage : Page
     private bool _isVariantDirty;
     private bool _suppressSceneEditorChanges;
     private bool _suppressSceneSelection;
+    private bool _pageLoaded;
 
     private PlanVariantDto? SelectedVariant =>
         _plan is not null &&
@@ -49,11 +50,13 @@ public sealed partial class AiPlannerLabPage : Page
 
     private async void AiPlannerLabPage_Loaded(object sender, RoutedEventArgs e)
     {
+        _pageLoaded = true;
         await LoadAsync();
     }
 
     private void AiPlannerLabPage_Unloaded(object sender, RoutedEventArgs e)
     {
+        _pageLoaded = false;
         _operationCancellation?.Cancel();
     }
 
@@ -89,6 +92,7 @@ public sealed partial class AiPlannerLabPage : Page
     private async Task LoadProjectAsync(string projectId, CancellationToken cancellationToken)
     {
         var response = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         _project = response.Project;
         _session.ActiveProjectId = response.Project.Id;
         if (response.VisualDna.ValueKind == JsonValueKind.Object)
@@ -185,7 +189,8 @@ public sealed partial class AiPlannerLabPage : Page
             "Generating plan variants",
             async cancellationToken =>
             {
-                _plan = await App.Services.ApiClient.GeneratePlanAsync(project.Id, request, mode, cancellationToken);
+                _plan = await App.Services.ApiClient.AnalyzeAndBuildPlanAsync(project.Id, request, mode, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 PresentPlan();
                 await RefreshProjectRevisionAsync(project.Id, cancellationToken);
             },
@@ -274,6 +279,57 @@ public sealed partial class AiPlannerLabPage : Page
             ? $"{item.Variant.SceneCount} scenes"
             : item.Variant.Logline;
         RefreshSceneList();
+        PresentSchedule();
+    }
+
+    private void PresentSchedule()
+    {
+        var draft = SelectedVariant?.ScheduleDraft;
+        if (draft is null)
+        {
+            ScheduleSummaryText.Text = "This legacy variant has no schedule draft yet. Use Regenerate Draft to prepare one.";
+            ScheduleWarningsText.Text = string.Empty;
+            ScheduleDetailsTextBox.Text = string.Empty;
+            return;
+        }
+        ScheduleSummaryText.Text = string.Join(" · ", draft.Summary.Select(item => $"{item.Value} {item.Key.Replace('_', ' ')}"));
+        ScheduleWarningsText.Text = string.Join(Environment.NewLine, draft.Warnings);
+        var lines = new List<string>();
+        foreach (string group in new[] { "prompt_anchors", "image_anchors", "camera_keys", "motion_keys", "markers" })
+        {
+            if (draft.AdditionalData?.TryGetValue(group, out var points) != true || points.ValueKind != JsonValueKind.Array)
+                continue;
+            lines.Add(group.Replace('_', ' ').ToUpperInvariant());
+            foreach (var point in points.EnumerateArray())
+            {
+                if (point.ValueKind != JsonValueKind.Object) continue;
+                string time = point.TryGetProperty("t", out var stamp) ? stamp.ToString() : "?";
+                string reason = point.TryGetProperty("reason", out var why) ? why.ToString() : string.Empty;
+                string detail = point.TryGetProperty("prompt", out var prompt) ? prompt.ToString()
+                    : point.TryGetProperty("state", out var state) ? state.ToString()
+                    : point.TryGetProperty("motion_score", out var motion) ? $"Motion intensity {motion}" : string.Empty;
+                lines.Add($"{time}s — {reason}. {detail}");
+            }
+            lines.Add(string.Empty);
+        }
+        ScheduleDetailsTextBox.Text = string.Join(Environment.NewLine, lines);
+    }
+
+    private async void RegenerateScheduleButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_project is not { } project || SelectedVariant is null || _isOperationBusy) return;
+        if (!await SaveSelectedVariantAsync()) return;
+        await RunOperationAsync("Regenerating schedule draft", async cancellationToken =>
+        {
+            var response = await App.Services.ApiClient.RegeneratePlannerScheduleAsync(project.Id,
+                new PlannerScheduleRequest { VariantIndex = _selectedVariantIndex, ExpectedRevision = _project?.Revision }, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!response.Ok || response.Draft is null) throw new InvalidDataException("The backend returned no schedule draft.");
+            // Saving scene edits may replace the variant instance.
+            if (SelectedVariant is { } current) current.ScheduleDraft = response.Draft;
+            PresentSchedule();
+            await RefreshProjectRevisionAsync(project.Id, cancellationToken);
+        }, "Draft regenerated. Review it before approval; Timeline is unchanged.");
     }
 
     private async void ApplyTimelineButton_Click(object sender, RoutedEventArgs e)
@@ -289,33 +345,27 @@ public sealed partial class AiPlannerLabPage : Page
             return;
         }
 
-        var dialog = new ContentDialog
+        if (_isVariantDirty)
         {
-            XamlRoot = XamlRoot,
-            Title = "Apply selected plan to Timeline?",
-            Content = "This replaces generated Timeline content with the selected Planner variant.",
-            PrimaryButtonText = "Apply plan",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Primary,
-        };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-        {
+            if (await SaveSelectedVariantAsync())
+                ShowStatus(InfoBarSeverity.Informational, "Review the updated draft", "Your scene edits regenerated the draft. Review Schedule draft, then approve it.");
             return;
         }
-
-        if (!await SaveSelectedVariantAsync())
+        var draft = SelectedVariant?.ScheduleDraft;
+        if (draft is null)
         {
+            ShowStatus(InfoBarSeverity.Warning, "Draft required", "Regenerate and review a schedule draft before approval.");
             return;
         }
 
         await RunOperationAsync(
-            "Applying plan to Timeline",
-            cancellationToken => App.Services.ApiClient.ApplyPlanToTimelineAsync(
-                project.Id,
-                _selectedVariantIndex,
-                true,
-                StudioPageHelpers.ExpectedRevision(_project),
-                cancellationToken),
+            "Applying approved schedule to Timeline",
+            async cancellationToken =>
+            {
+                var response = await App.Services.ApiClient.ApplyPlannerScheduleAsync(project.Id,
+                    new PlannerScheduleRequest { VariantIndex = _selectedVariantIndex, ExpectedRevision = _project?.Revision, ScheduleRevision = draft.ScheduleRevision }, cancellationToken);
+                if (!response.Ok) throw new InvalidDataException("The backend did not apply the approved schedule.");
+            },
             successMessage: "The selected variant is now applied to Timeline.",
             afterSuccess: cancellationToken => RefreshProjectRevisionAsync(project.Id, cancellationToken));
     }
@@ -933,6 +983,7 @@ public sealed partial class AiPlannerLabPage : Page
         string? successMessage = null,
         Func<CancellationToken, Task>? afterSuccess = null)
     {
+        if (!_pageLoaded || _isOperationBusy) return;
         _operationCancellation?.Cancel();
         var operationCancellation = new CancellationTokenSource();
         _operationCancellation = operationCancellation;
@@ -941,6 +992,8 @@ public sealed partial class AiPlannerLabPage : Page
         try
         {
             await operation(operationCancellation.Token);
+            operationCancellation.Token.ThrowIfCancellationRequested();
+            if (!_pageLoaded || !ReferenceEquals(_operationCancellation, operationCancellation)) return;
             if (afterSuccess is not null)
             {
                 await afterSuccess(operationCancellation.Token);
@@ -957,7 +1010,12 @@ public sealed partial class AiPlannerLabPage : Page
         }
         catch (ProjectRevisionConflictException conflict)
         {
-            await HandleProjectRevisionConflictAsync(conflict, operationCancellation.Token);
+            if (_pageLoaded && !operationCancellation.IsCancellationRequested)
+            {
+                try { await HandleProjectRevisionConflictAsync(conflict, operationCancellation.Token); }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { ShowStatus(InfoBarSeverity.Error, "Reload failed", StudioPageHelpers.GetErrorMessage(ex)); }
+            }
         }
         catch (StudioApiException ex)
         {
@@ -971,13 +1029,19 @@ public sealed partial class AiPlannerLabPage : Page
         {
             ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
         }
+        catch (Exception ex)
+        {
+            // Event handlers must report malformed responses or platform failures,
+            // rather than let async-void exceptions terminate the desktop process.
+            ShowStatus(InfoBarSeverity.Error, $"{title} failed", StudioPageHelpers.GetErrorMessage(ex));
+        }
         finally
         {
             operationCancellation.Dispose();
             if (ReferenceEquals(_operationCancellation, operationCancellation))
             {
                 _operationCancellation = null;
-                SetBusy(false);
+                if (_pageLoaded) SetBusy(false);
             }
         }
     }
@@ -991,6 +1055,7 @@ public sealed partial class AiPlannerLabPage : Page
     private async Task RefreshProjectRevisionAsync(string projectId, CancellationToken cancellationToken)
     {
         ProjectResponse refreshed = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         _project = refreshed.Project;
         _session.ActiveProjectId = refreshed.Project.Id;
     }
@@ -1047,12 +1112,19 @@ public sealed partial class AiPlannerLabPage : Page
         CancelPlannerButton.IsEnabled = isBusy;
         RefreshPlannerButton.IsEnabled = !isBusy;
         GeneratePlanButton.IsEnabled = !isBusy;
+        RegenerateScheduleButton.IsEnabled = !isBusy && SelectedVariant is not null;
         ProjectComboBox.IsEnabled = !isBusy;
         UpdateCurationControls();
     }
 
     private void ShowStatus(InfoBarSeverity severity, string title, string message)
     {
+        if (!_pageLoaded) return;
+        if (!DispatcherQueue.HasThreadAccess)
+        {
+            _ = DispatcherQueue.TryEnqueue(() => ShowStatus(severity, title, message));
+            return;
+        }
         PlannerInfoBar.Severity = severity;
         PlannerInfoBar.Title = title;
         PlannerInfoBar.Message = message;

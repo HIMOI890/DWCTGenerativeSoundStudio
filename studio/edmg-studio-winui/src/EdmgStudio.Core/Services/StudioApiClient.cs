@@ -161,6 +161,22 @@ public sealed class StudioApiClient : IDisposable
             true,
             cancellationToken);
 
+    public Task<PlannerScheduleResponse> GetPlannerScheduleAsync(string projectId, int variantIndex, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<PlannerScheduleResponse>(HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/schedule?variant_index={variantIndex}", null, true, cancellationToken);
+
+    public Task<PlannerScheduleResponse> RegeneratePlannerScheduleAsync(string projectId, PlannerScheduleRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<PlannerScheduleRequest, PlannerScheduleResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/schedule/regenerate", request, cancellationToken);
+
+    public Task<PlannerScheduleResponse> ApplyPlannerScheduleAsync(string projectId, PlannerScheduleRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<PlannerScheduleRequest, PlannerScheduleResponse>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/schedule/apply", request, cancellationToken);
+
+    public Task<PlanDto> AnalyzeAndBuildPlanAsync(string projectId, PlanRequest request, string mode = "auto", CancellationToken cancellationToken = default) =>
+        PostJsonAsync<PlanRequest, PlanDto>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/analyze_and_plan?mode={Uri.EscapeDataString(PlannerWorkflow.NormalizeMode(mode))}", request, cancellationToken);
+
     public Task<PlanDto> GeneratePlanAsync(
         string projectId,
         PlanRequest request,

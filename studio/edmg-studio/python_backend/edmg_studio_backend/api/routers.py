@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from .media import validate_timeline_media
 
 from ..domain.continuity_validation import validate_project_continuity
 from ..domain.live_assets import compile_live_assets, sample_bounded_modulation
@@ -453,7 +454,11 @@ def create_project_router(
             raise HTTPException(400, str(exc)) from exc
         if req.timeline is not None:
             meta["timeline"] = req.timeline or {"layers": []}
-        validate_metadata_patch(meta)
+        try:
+            validate_metadata_patch(meta)
+            validate_timeline_media(store().project_dir(project_id), meta.get("timeline") or {})
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         proj = store().mutate(project_id, lambda current: current.meta.update(meta))
         journal = AutosaveJournal(store().project_dir(project_id))
         payload = journal.write_journal(
@@ -526,7 +531,8 @@ def create_project_router(
             recovered = extract_recoverable_metadata(payload["meta"])
             validate_metadata_patch(recovered)
             proj.meta, _ = merge_recovery_metadata(proj.meta, recovered)
-        except MetadataValidationError as exc:
+            validate_timeline_media(store().project_dir(project_id), proj.meta.get("timeline") or {})
+        except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         store().save(proj)
         journal.write_snapshot(project_id=project_id, meta=proj.meta, reason="recovery_applied")

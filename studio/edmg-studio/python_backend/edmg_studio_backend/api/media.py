@@ -70,7 +70,10 @@ def create_media_router(get_store, security):
     @router.post("/v1/projects/{project_id}/media-urls")
     def issue(project_id: str, req: MediaBatchRequest):
         store = get_store()
-        project = store.get(project_id)
+        try:
+            project = store.get(project_id)
+        except ValueError as exc:
+            raise HTTPException(400, "Invalid project path") from exc
         if project is None:
             raise HTTPException(404, "Project not found")
         urls = []

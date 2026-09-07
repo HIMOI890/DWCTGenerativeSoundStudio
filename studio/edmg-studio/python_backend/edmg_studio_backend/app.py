@@ -350,6 +350,9 @@ from .revisions import RevisionRoute
 app.router.route_class = RevisionRoute
 from .api.media import create_media_router, validate_preview, validate_timeline_media
 app.include_router(create_media_router(lambda: store, backend_security))
+from .api.planner_schedule import create_schedule_router
+from .domain.planner_schedule import attach_schedule_drafts
+app.include_router(create_schedule_router(lambda: store))
 
 app.add_middleware(BackendSecurityMiddleware, settings=backend_security)
 
@@ -6994,8 +6997,15 @@ def generate_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
         plan = _enrich_normalized_plan(plan, analysis if isinstance(analysis, dict) else {})
 
     proj.meta["last_plan"] = plan
+    attach_schedule_drafts(proj, resulting_revision=proj.revision + 1)
     store.save(proj)
     return plan
+
+
+@app.post("/v1/projects/{project_id}/analyze_and_plan")
+def analyze_and_build_plan(project_id: str, req: PlanRequest, mode: str = "auto"):
+    analyze_audio(project_id)
+    return generate_plan(project_id, req, mode)
 
 
 @app.post("/v1/projects/{project_id}/timeline/apply_plan")
@@ -7059,6 +7069,7 @@ def update_plan_variant(project_id: str, req: StoryboardVariantUpdateRequest):
         proj.meta.get("analysis") if isinstance(proj.meta.get("analysis"), dict) else {},
     )
     proj.meta["last_plan"] = normalized_plan
+    attach_schedule_drafts(proj, resulting_revision=proj.revision + 1, variant_indices={variant_index})
 
     planner_lab = proj.meta.get("last_planner_lab")
     if isinstance(planner_lab, dict):
@@ -7119,6 +7130,7 @@ def import_planner_lab(project_id: str, req: PlannerLabImportRequest):
         proj.meta.get("analysis") if isinstance(proj.meta.get("analysis"), dict) else {},
     )
     proj.meta["last_plan"] = normalized_plan
+    attach_schedule_drafts(proj, resulting_revision=proj.revision + 1)
     proj.meta["last_planner_lab"] = {
         "analysis": deepcopy(req.analysis),
         "plan": deepcopy(req.plan),

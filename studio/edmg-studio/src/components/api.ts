@@ -467,7 +467,7 @@ export async function apiDelete(path: string, options: ApiRequestOptions = {}) {
 export async function apiUpload(path: string, file: File, options: ApiRequestOptions = {}) {
   const fd = new FormData();
   fd.append("file", file);
-  if (Number.isInteger(options.expectedRevision) && Number(options.expectedRevision) >= 0) {
+  if (Number.isInteger(options.expectedRevision) && Number(options.expectedRevision) >= 1) {
     fd.append("expected_revision", String(options.expectedRevision));
   }
   const r = await apiFetch(path, { method: "POST", body: fd }, options);

@@ -2067,6 +2067,27 @@ public sealed class StudioApiClientTests
         public Uri CurrentBackendUri { get; set; } = new("http://127.0.0.1:7863/");
     }
 
+    [TestMethod]
+    public async Task PlannerScheduleApprovalCarriesBothRevisions()
+    {
+        string? body = null;
+        using var http = new HttpClient(new RecordingHandler(async (request, cancellation) =>
+        {
+            Assert.AreEqual("/v1/projects/p1/schedule/apply", request.RequestUri!.AbsolutePath);
+            body = await request.Content!.ReadAsStringAsync(cancellation);
+            return JsonResponse("""{"ok":true,"revision":9,"timeline":{"tracks":[]}}""");
+        }));
+        using var client = new StudioApiClient(new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")), new StaticTokenProvider("test"), http);
+        var result = await client.ApplyPlannerScheduleAsync("p1", new PlannerScheduleRequest
+        { VariantIndex = 2, ExpectedRevision = 8, ScheduleRevision = "reviewed-draft" });
+        Assert.IsTrue(result.Ok);
+        Assert.AreEqual(9L, result.Revision);
+        using var payload = JsonDocument.Parse(body!);
+        Assert.AreEqual(8L, payload.RootElement.GetProperty("expected_revision").GetInt64());
+        Assert.AreEqual("reviewed-draft", payload.RootElement.GetProperty("schedule_revision").GetString());
+        Assert.AreEqual(2, payload.RootElement.GetProperty("variant_index").GetInt32());
+    }
+
     private sealed record CapturedRequest(
         HttpMethod Method,
         Uri Uri,

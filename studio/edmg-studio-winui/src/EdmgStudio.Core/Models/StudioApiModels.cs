@@ -264,6 +264,9 @@ public sealed class PlanDto
 
 public sealed class PlanVariantDto
 {
+    [JsonPropertyName("schedule_draft")]
+    public PlannerScheduleDraft? ScheduleDraft { get; set; }
+
     [JsonPropertyName("index")]
     public int? Index { get; init; }
 
@@ -722,6 +725,9 @@ public static class StudioJson
 [JsonSerializable(typeof(SignedMediaUrlResponse))]
 [JsonSerializable(typeof(PlanRequest))]
 [JsonSerializable(typeof(PlanDto))]
+[JsonSerializable(typeof(PlannerScheduleDraft))]
+[JsonSerializable(typeof(PlannerScheduleRequest))]
+[JsonSerializable(typeof(PlannerScheduleResponse))]
 [JsonSerializable(typeof(List<PlanVariantDto>))]
 [JsonSerializable(typeof(PlannerLabSettings))]
 [JsonSerializable(typeof(PlannerLabImportRequest))]

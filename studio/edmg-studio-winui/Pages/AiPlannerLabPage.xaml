@@ -215,7 +215,7 @@
                                 AccessKey="G"
                                 AutomationProperties.AutomationId="Planner.Generate"
                                 Click="GeneratePlanButton_Click"
-                                Content="Generate variants"
+                                Content="Analyze and Build Plan"
                                 HorizontalAlignment="Stretch"
                                 Style="{StaticResource AccentButtonStyle}" />
                         </StackPanel>
@@ -244,7 +244,7 @@
                         AutomationProperties.AutomationId="Planner.ApplyTimeline"
                         Click="ApplyTimelineButton_Click"
                         Icon="Accept"
-                        Label="Apply to timeline" />
+                        Label="Approve Plan and Apply Schedule" />
                     <AppBarButton
                         AutomationProperties.AutomationId="Planner.OpenWorkspace"
                         Click="OpenWorkspaceButton_Click"
@@ -309,6 +309,17 @@
                                 Text="Generated scene structure and raw backend data will appear here."
                                 TextWrapping="Wrap" />
                             <TabView Grid.Row="2" AutomationProperties.AutomationId="Planner.DetailTabs">
+                                <TabViewItem Header="Schedule draft" IsClosable="False">
+                                    <ScrollViewer>
+                                        <StackPanel Padding="12" Spacing="12">
+                                            <TextBlock x:Name="ScheduleSummaryText" Text="Select a variant to review its draft." TextWrapping="Wrap" />
+                                            <TextBlock x:Name="ScheduleWarningsText" TextWrapping="Wrap" />
+                                            <Button x:Name="RegenerateScheduleButton" Content="Regenerate Draft" Click="RegenerateScheduleButton_Click" />
+                                            <TextBlock Text="The draft does not change Timeline until you approve it. Manual tracks and locked keyframes are preserved." TextWrapping="Wrap" />
+                                            <TextBox x:Name="ScheduleDetailsTextBox" Header="Anchors, musical cues, motion, and continuity" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </TabViewItem>
                                 <TabViewItem Header="Scenes" IsClosable="False">
                                     <Grid ColumnSpacing="14">
                                         <Grid.ColumnDefinitions>

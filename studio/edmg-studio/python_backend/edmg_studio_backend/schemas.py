@@ -53,6 +53,7 @@ class ProjectCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
 class PlanRequest(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=1)
     title: str | None = None
     user_notes: str | None = None
     style_prefs: str | None = None
@@ -60,11 +61,13 @@ class PlanRequest(BaseModel):
     max_scenes: int = Field(default=12, ge=1, le=64)
 
 class ApplyPlanRequest(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=1)
     variant_index: int = 0
     overwrite: bool = False
 
 
 class StoryboardVariantUpdateRequest(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=1)
     variant_index: int = 0
     scenes: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -387,12 +390,14 @@ class TimelineRenderRequest(BaseModel):
 
 
 class AutosaveRequest(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=1)
     timeline: dict[str, Any] | None = None
     meta: dict[str, Any] | None = None
     reason: str = "autosave"
 
 
 class RecoveryApplyRequest(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=1)
     source: str = "journal"
     snapshot_name: str | None = None
 

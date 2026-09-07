@@ -3,6 +3,44 @@ using System.Text.Json.Serialization;
 
 namespace EdmgStudio.Core.Models;
 
+public sealed class PlannerScheduleRequest
+{
+    [JsonPropertyName("variant_index")]
+    public int VariantIndex { get; init; }
+    [JsonPropertyName("expected_revision")]
+    public long? ExpectedRevision { get; init; }
+    [JsonPropertyName("schedule_revision")]
+    public string? ScheduleRevision { get; init; }
+}
+
+public sealed class PlannerScheduleDraft
+{
+    [JsonPropertyName("schema_version")]
+    public int SchemaVersion { get; init; }
+    [JsonPropertyName("schedule_revision")]
+    public string ScheduleRevision { get; init; } = string.Empty;
+    [JsonPropertyName("source_project_revision")]
+    public long SourceProjectRevision { get; init; }
+    [JsonPropertyName("summary")]
+    public Dictionary<string, int> Summary { get; init; } = [];
+    [JsonPropertyName("warnings")]
+    public List<string> Warnings { get; init; } = [];
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+public sealed class PlannerScheduleResponse
+{
+    [JsonPropertyName("ok")]
+    public bool Ok { get; init; }
+    [JsonPropertyName("revision")]
+    public long Revision { get; init; }
+    [JsonPropertyName("schedule_draft")]
+    public PlannerScheduleDraft? Draft { get; init; }
+    [JsonPropertyName("timeline")]
+    public JsonElement Timeline { get; init; }
+}
+
 public sealed class PlannerLabSettings
 {
     [JsonPropertyName("analysisFocus")]

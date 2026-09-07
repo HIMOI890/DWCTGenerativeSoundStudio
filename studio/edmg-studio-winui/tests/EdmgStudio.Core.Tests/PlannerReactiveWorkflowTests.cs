@@ -7,6 +7,22 @@ namespace EdmgStudio.Core.Tests;
 public sealed class PlannerReactiveWorkflowTests
 {
     [TestMethod]
+    public void ScheduleDraftRoundTripsWithContinuityAndUnknownFutureFields()
+    {
+        const string json = """{"variants":[{"name":"Draft","scenes":[],"schedule_draft":{"schema_version":1,"schedule_revision":"draft-7","source_project_revision":7,"summary":{"image_anchors":4},"warnings":["No transcript"],"image_anchors":[{"t":0,"state":{"position":"left"}}],"future_field":{"keep":true}}}]}""";
+        var plan = JsonSerializer.Deserialize(json, StudioJson.GetTypeInfo<PlanDto>());
+        Assert.IsNotNull(plan);
+        var draft = plan.Variants[0].ScheduleDraft;
+        Assert.IsNotNull(draft);
+        Assert.AreEqual("draft-7", draft.ScheduleRevision);
+        Assert.AreEqual(7L, draft.SourceProjectRevision);
+        Assert.AreEqual(4, draft.Summary["image_anchors"]);
+        string saved = JsonSerializer.Serialize(plan, StudioJson.GetTypeInfo<PlanDto>());
+        StringAssert.Contains(saved, "future_field");
+        StringAssert.Contains(saved, "position");
+    }
+
+    [TestMethod]
     public void PlannerWorkflow_PreservesSupportedModesAndBuildsCreativeSettings()
     {
         Assert.AreEqual("edmg_core", PlannerWorkflow.NormalizeMode(" EDMG_CORE "));
