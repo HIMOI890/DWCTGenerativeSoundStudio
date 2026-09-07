@@ -47,3 +47,14 @@ Verification since first checkpoint:
 - Latest backend contract selection: 23 passed, including symlink escape rejection and nested metadata preservation. Additional preview entrypoint wiring after that selection requires a final rerun.
 
 The repository scope helper performed its documented frozen CPU sync and removed the optional ruff package from that test environment. No dependency inputs were changed to suppress a failure. The source runtime reports torch 2.11.0+cpu and CUDA unavailable; installed model folders alone do not establish CUDA proof readiness. Real temporal MP4 proof remains unverified, with no generation claimed.
+
+## Acceptance rerun after second checkpoint
+
+- Backend: 538 passed, one third-party Starlette deprecation warning (`C:\DWCT-Temp\remediation-backend-acceptance.log`).
+- Electron: 41 test files / 173 tests passed; lint and typecheck exit 0 (`remediation-ui-acceptance.log`, `remediation-lint-acceptance.log`, `remediation-types-acceptance.log`).
+- WinUI application: SDK 10.0.400, build succeeded with zero warnings and errors (`remediation-winui-build-final.log`). Repository SDK pin unchanged.
+- WinUI Core: 262 passed in the expanded regression run.
+
+Isolated readiness evidence: `C:\DWCT-Temp\cuda-proof-20260907-063356\readiness.json`. Source backend launched on loopback port 17863 with a separate data directory, model downloads disabled, worker autostart disabled, and configured concurrency 1. Proof project `91022ecab05c44c9ae09acf717f5d184`, revision 1. Hardware endpoint reports `backend=cpu`, `available_backends=[cpu]`, and `cuda_runtime_ready=false`; the source interpreter reports `torch 2.11.0+cpu`. No inference job was queued. The internal CUDA proof is blocked on a CUDA-capable runtime for the current source. FLUX/SVD folder presence does not verify model load, temporal motion, MP4 muxing, handoffs, or cache provenance.
+
+External shared-worktree commit `6e73ff151eeed4735be3bdaf49915d6822d09d69` (`CUDA work`) added `# Unified AI Planner, Automatic Key.md` and was already pushed. It was preserved; its contents are a separate document, not newly adopted implementation scope.
