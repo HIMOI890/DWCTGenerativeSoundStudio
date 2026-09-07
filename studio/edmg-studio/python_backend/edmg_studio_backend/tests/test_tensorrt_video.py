@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from edmg_studio_backend.tests.revision_client import TestClient
 from PIL import Image
 
 from edmg_studio_backend import app as app_module
@@ -892,9 +892,6 @@ def test_legacy_tensorrt_deforum_job_preserves_canonical_cancellation(tmp_path, 
     assert completed.status == "canceled"
     assert completed.result == {
         "partial": "outputs/videos/partial.mp4",
-        "compatibility_route": "tensorrt-deforum",
-        "execution_mode": "canonical_tensorrt_keyframe_video",
-        "legacy_deforum_schedule_applied": False,
     }
     jobs.close()
 

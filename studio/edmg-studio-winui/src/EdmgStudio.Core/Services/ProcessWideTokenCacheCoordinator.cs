@@ -32,9 +32,14 @@ internal sealed class TokenCacheEntry(ProcessWideTokenCacheCoordinator coordinat
     }
 
     public void Store(string? value)
+        => StoreIfCurrent(value, _coordinator.CurrentVersion);
+
+    public bool StoreIfCurrent(string? value, long version)
     {
+        if (_coordinator.CurrentVersion != version) return false;
         _value = value;
-        Volatile.Write(ref _observedVersion, _coordinator.CurrentVersion);
+        Volatile.Write(ref _observedVersion, version);
         Volatile.Write(ref _hasValue, 1);
+        return _coordinator.CurrentVersion == version;
     }
 }

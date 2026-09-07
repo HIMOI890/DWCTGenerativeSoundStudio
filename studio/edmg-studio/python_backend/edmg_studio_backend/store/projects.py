@@ -14,6 +14,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from ..revisions import request_revision, record_revision, background_context, revision_context
+from copy import deepcopy
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +120,7 @@ def validate_project_document(data: dict[str, Any]) -> dict[str, Any]:
             f"this Studio build supports up to {CURRENT_SCHEMA_VERSION}"
         )
     return {
+        **data,
         "id": project_id,
         "name": name,
         "created_at": created_at,
@@ -382,7 +385,18 @@ class ProjectStore:
             return None
         if data is None:
             return None
-        return self._to_project(data)
+        expected = request_revision(project_id, None)
+        context = revision_context.get()
+        if context and context["project_id"] == project_id and expected is None:
+            from fastapi import HTTPException
+            raise HTTPException(428, {"code": "PROJECT_REVISION_REQUIRED", "message": "Reload the project before saving; expected_revision is required."})
+        if expected is not None and expected != int(data["revision"]):
+            raise StaleProjectRevisionError(project_id, expected, int(data["revision"]))
+        project = self._to_project(data)
+        background = background_context.get()
+        if background is not None:
+            background["baselines"][id(project)] = deepcopy(project.meta)
+        return project
 
     def _payload_for_project(
         self,
@@ -413,6 +427,15 @@ class ProjectStore:
         }
 
     def save(self, proj: Project, *, expected_revision: int | None = None) -> None:
+        background = background_context.get()
+        if background is not None:
+            baseline = background["baselines"].get(id(proj))
+            if baseline is None:
+                raise ValueError("Background project save requires a loaded project baseline")
+            background["pending"].append((proj.id, deepcopy(baseline), deepcopy(proj.meta)))
+            background["baselines"][id(proj)] = deepcopy(proj.meta)
+            return
+        expected_revision = request_revision(proj.id, expected_revision)
         safe_project_id = self._validate_project_id(proj.id)
         with self._synchronized_project(safe_project_id):
             current = self._load_document(safe_project_id, persist_migrations=False)
@@ -443,7 +466,9 @@ class ProjectStore:
                 updated_at=updated_at,
                 revision=next_revision,
             )
+            payload = {**(current or {}), **payload}
             self._write_atomic(target, payload)
+            record_revision(proj.id, next_revision)
             proj.created_at = created_at
             proj.updated_at = updated_at
             proj.revision = next_revision
@@ -457,6 +482,14 @@ class ProjectStore:
         *,
         expected_revision: int | None = None,
     ) -> Project:
+        if background_context.get() is not None:
+            project = self.get(project_id)
+            if project is None:
+                raise KeyError("Project not found")
+            mutator(project)
+            self.save(project)
+            return project
+        expected_revision = request_revision(project_id, expected_revision)
         safe_project_id = self._validate_project_id(project_id)
         with self._synchronized_project(safe_project_id):
             current = self._load_document(safe_project_id, persist_migrations=False)
@@ -478,7 +511,9 @@ class ProjectStore:
                 updated_at=updated_at,
                 revision=actual_revision + 1,
             )
+            payload = {**current, **payload}
             self._write_atomic(self._project_path(safe_project_id), payload)
+            record_revision(project_id, actual_revision + 1)
             proj.updated_at = updated_at
             proj.revision = actual_revision + 1
             proj.meta = dict(payload["meta"])

@@ -9,6 +9,8 @@ from typing import Any
 SERVER_OWNED_METADATA_FIELDS = frozenset(
     {
         "active_parseq_manifest",
+        "id", "project_id", "revision", "created_at", "updated_at", "schema_version",
+        "filename", "path", "artifacts",
         "analysis",
         "audio",
         "conductor_promotions",
@@ -116,7 +118,7 @@ def validate_metadata_patch(
         raise MetadataValidationError(f"{label} must be an object.")
     resolved_limits = limits or MetadataPatchLimits.from_env()
     try:
-        encoded = json.dumps(patch, ensure_ascii=False, separators=(",", ":"))
+        encoded = json.dumps(patch, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise MetadataValidationError(f"{label} must be JSON-serializable.") from exc
     if len(encoded.encode("utf-8")) > resolved_limits.max_bytes:
@@ -165,7 +167,7 @@ def merge_recovery_metadata(
     current_meta: dict[str, Any] | None,
     recovered_meta: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], list[str]]:
-    merged: dict[str, Any] = {}
+    merged: dict[str, Any] = deepcopy(current_meta or {})
     current = current_meta if isinstance(current_meta, dict) else {}
     recovered = recovered_meta if isinstance(recovered_meta, dict) else {}
     for key, value in current.items():

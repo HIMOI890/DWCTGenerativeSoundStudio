@@ -18,7 +18,8 @@ def _env_int(name: str, default: int) -> int:
 
 def _env_float(name: str, default: float) -> float:
     try:
-        return max(0.01, float(os.getenv(name, str(default)).strip()))
+        value = float(os.getenv(name, str(default)).strip())
+        return value if math.isfinite(value) and value > 0 else default
     except Exception:
         return default
 
@@ -35,16 +36,17 @@ class PreviewBudgetLimits:
     max_work_units: int
 
     @classmethod
-    def from_env(cls) -> "PreviewBudgetLimits":
+    def from_env(cls, *, diffusion: bool = False) -> "PreviewBudgetLimits":
+        prefix = "EDMG_DIFFUSION_PREVIEW" if diffusion else "EDMG_PREVIEW"
         return cls(
-            max_width=_env_int("EDMG_PREVIEW_MAX_WIDTH", 1280),
-            max_height=_env_int("EDMG_PREVIEW_MAX_HEIGHT", 1280),
-            max_pixels=_env_int("EDMG_PREVIEW_MAX_PIXELS", 1_048_576),
-            max_duration_s=_env_float("EDMG_PREVIEW_MAX_DURATION_S", 12.0),
-            max_fps=_env_int("EDMG_PREVIEW_MAX_FPS", 24),
-            max_frames=_env_int("EDMG_PREVIEW_MAX_FRAMES", 180),
-            max_diffusion_steps=_env_int("EDMG_PREVIEW_MAX_DIFFUSION_STEPS", 12),
-            max_work_units=_env_int("EDMG_PREVIEW_MAX_WORK_UNITS", 80_000_000),
+            max_width=_env_int(prefix + "_MAX_WIDTH", 1024 if diffusion else 2048),
+            max_height=_env_int(prefix + "_MAX_HEIGHT", 1024 if diffusion else 2048),
+            max_pixels=_env_int(prefix + "_MAX_PIXELS", 4_194_304),
+            max_duration_s=_env_float(prefix + "_MAX_DURATION_S", 5.0 if diffusion else 10.0),
+            max_fps=_env_int(prefix + "_MAX_FPS", 8 if diffusion else 12),
+            max_frames=_env_int(prefix + "_MAX_FRAMES", 40 if diffusion else 120),
+            max_diffusion_steps=_env_int("EDMG_PREVIEW_MAX_DIFFUSION_STEPS", 30),
+            max_work_units=_env_int(prefix + "_MAX_WORK_UNITS", 41_943_040 if diffusion else 125_829_120),
         )
 
     def _validate_dimensions(self, *, width: int, height: int, prefix: str) -> int:
@@ -83,6 +85,8 @@ class PreviewBudgetLimits:
     ) -> tuple[float, int, int]:
         start = float(start_s)
         end = float(end_s)
+        if not math.isfinite(start) or not math.isfinite(end) or start < 0:
+            raise PreviewBudgetViolation(f"{prefix} times must be finite and nonnegative.")
         if end <= start:
             raise PreviewBudgetViolation(f"{prefix} end_s must be greater than start_s.")
         duration_s = end - start
@@ -112,7 +116,7 @@ class PreviewBudgetLimits:
                 raise PreviewBudgetViolation(
                     f"{prefix} diffusion steps {steps_i} exceed limit {self.max_diffusion_steps}."
                 )
-            multiplier = steps_i
+            # Pixel-frames and diffusion steps have independent ceilings.
         work_units = pixels * frame_count * multiplier
         if work_units > self.max_work_units:
             raise PreviewBudgetViolation(

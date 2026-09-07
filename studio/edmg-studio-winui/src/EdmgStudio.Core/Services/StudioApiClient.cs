@@ -65,6 +65,7 @@ public sealed class StudioApiClient : IDisposable
     private readonly IBackendTokenProvider _tokenProvider;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _projectRevisions = new();
     private readonly string _projectMediaUrlsRelativePathTemplate;
 
     public StudioApiClient(
@@ -1844,6 +1845,8 @@ public sealed class StudioApiClient : IDisposable
                 StudioJson.GetTypeInfo<T>(),
                 cancellationToken)
             .ConfigureAwait(false);
+        if (result is not null)
+            RememberRevision(request.RequestUri!, JsonSerializer.SerializeToElement(result, StudioJson.GetTypeInfo<T>()));
         return result ?? throw new StudioApiException(
             response.StatusCode,
             "EMPTY_RESPONSE",
@@ -1865,6 +1868,7 @@ public sealed class StudioApiClient : IDisposable
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        RememberRevision(request.RequestUri!, document.RootElement);
         return document.RootElement.Clone();
     }
 
@@ -1912,6 +1916,7 @@ public sealed class StudioApiClient : IDisposable
                 responseStream,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
+        RememberRevision(request.RequestUri!, document.RootElement);
         return document.RootElement.Clone();
     }
 
@@ -1941,9 +1946,9 @@ public sealed class StudioApiClient : IDisposable
         }
 
         string? path = string.IsNullOrWhiteSpace(request.Path) ? null : request.Path.Trim();
-        if (purpose is "file" or "audio")
+        if (purpose is "file")
         {
-            path = RequireValue(path, nameof(request.Path));
+            path = RequireValue(path ?? string.Empty, nameof(request.Path));
         }
 
         if (request.Query.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null or JsonValueKind.Object))
@@ -1983,6 +1988,22 @@ public sealed class StudioApiClient : IDisposable
             or HttpStatusCode.MethodNotAllowed
             or HttpStatusCode.NotImplemented;
 
+    private static string? ProjectRevisionKey(Uri target)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(target.AbsolutePath, @"/v1/projects/([^/]+)");
+        return match.Success ? target.GetLeftPart(UriPartial.Authority) + "/" + match.Groups[1].Value : null;
+    }
+
+    private void RememberRevision(Uri target, JsonElement data)
+    {
+        string? key = ProjectRevisionKey(target);
+        if (key is null || data.ValueKind != JsonValueKind.Object) return;
+        if (data.TryGetProperty("project", out var project) && project.ValueKind == JsonValueKind.Object)
+            data = project;
+        if (data.TryGetProperty("revision", out var revision) && revision.TryGetInt64(out long value) && value > 0)
+            _projectRevisions[key] = value;
+    }
+
     private async Task<HttpRequestMessage> CreateRequestAsync(
         HttpMethod method,
         string relativePath,
@@ -2004,6 +2025,10 @@ public sealed class StudioApiClient : IDisposable
         }
 
         var request = new HttpRequestMessage(method, target) { Content = content };
+        string? revisionKey = ProjectRevisionKey(target);
+        if (method != HttpMethod.Get && method != HttpMethod.Head && revisionKey is not null
+            && _projectRevisions.TryGetValue(revisionKey, out long revision))
+            request.Headers.TryAddWithoutValidation("If-Match", revision.ToString(System.Globalization.CultureInfo.InvariantCulture));
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         if (includeCredentials)
         {

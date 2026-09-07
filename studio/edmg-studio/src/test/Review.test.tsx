@@ -9,6 +9,7 @@ describe("Review page", () => {
     installEdmgBridge();
     installFetchMock({
       "/v1/projects": { projects: [{ id: "p1", name: "Demo" }] },
+      "/v1/projects/p1": { project: { id: "p1", revision: 1, meta: {} } },
       "/v1/projects/p1/variant_review": {
         variant_review: {
           artifact_count: 1,

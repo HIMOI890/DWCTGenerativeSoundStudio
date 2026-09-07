@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from edmg_studio_backend.tests.revision_client import TestClient
 
 from edmg_studio_backend import app as backend_app
 from edmg_studio_backend.services.render_settings import RenderSettingsStore

@@ -9,6 +9,12 @@ describe("Timeline page", () => {
     installEdmgBridge();
     installFetchMock({
       "/v1/projects": { projects: [{ id: "p1", name: "Smoothness Test" }] },
+      "POST /v1/projects/p1/media-urls": (_path, init) => ({
+        expires_at: Math.floor(Date.now() / 1000) + 900,
+        urls: JSON.parse(String(init?.body)).requests.map((request: { purpose: string }) => ({
+          purpose: request.purpose, url: `/v1/projects/p1/${request.purpose === "audio" ? "audio" : "preview/frame"}?edmg_sig=test`,
+        })),
+      }),
       "/v1/projects/p1": {
         project: {
           id: "p1",

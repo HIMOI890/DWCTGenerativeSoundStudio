@@ -266,7 +266,7 @@ describe("Outputs page", () => {
   it("keeps the selected FLUX project and output visible after the page remounts", async () => {
     window.localStorage.setItem(
       "edmg_studio_session_v1",
-      JSON.stringify({ projectId: "p2", selectedVariant: 0, lastHandoff: null }),
+      JSON.stringify({ backendScope: "http://127.0.0.1:7863", projectId: "p2", selectedVariant: 0, lastHandoff: null }),
     );
     const fetchMock = installFetchMock({
       "/v1/projects": {

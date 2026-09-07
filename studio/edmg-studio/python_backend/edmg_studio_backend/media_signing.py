@@ -130,7 +130,7 @@ class MediaUrlSigner:
         if reserved[SIGNED_MEDIA_VERSION_KEY][0] != SIGNED_MEDIA_VERSION:
             return SignedMediaValidation(False, True, "MEDIA_URL_MALFORMED", "Signed media URL version is not supported.")
         expires_raw = reserved[SIGNED_MEDIA_EXPIRES_KEY][0]
-        if not expires_raw.isascii() or not expires_raw.isdecimal():
+        if len(expires_raw) > 12 or not expires_raw.isascii() or not expires_raw.isdecimal():
             return SignedMediaValidation(False, True, "MEDIA_URL_MALFORMED", "Signed media URL expiry is malformed.")
         expires_at = int(expires_raw)
         current = int(now if now is not None else time.time())
@@ -140,6 +140,8 @@ class MediaUrlSigner:
             return SignedMediaValidation(False, True, "MEDIA_URL_INVALID_TTL", "Signed media URL lifetime is invalid.")
         payload = self._signature_payload(method=method, path=path, query_pairs=pairs, project_id=project_id, purpose=purpose, expires_at=expires_at)
         supplied = reserved[SIGNED_MEDIA_SIGNATURE_KEY][0]
+        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", supplied):
+            return SignedMediaValidation(False, True, "MEDIA_URL_INVALID", "Signed media URL is invalid.")
         valid = any(hmac.compare_digest(supplied, _encode_signature(hmac.new(secret, payload, hashlib.sha256).digest())) for secret in self._verification_secrets)
         if not valid:
             return SignedMediaValidation(False, True, "MEDIA_URL_INVALID", "Signed media URL is invalid.")

@@ -596,7 +596,6 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
   const schedulePreview = sparseSchedules[selectedSchedule] ?? '';
 
   useEffect(() => {
-    let cancelled = false;
     const hydrationKey = [
       studioProjectId || '',
       studioSelectedVariant,
@@ -650,9 +649,6 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
     };
 
     void hydrate();
-    return () => {
-      cancelled = true;
-    };
   }, [studioAudioName, studioProject, studioProjectId, studioProjectName, studioSelectedVariant]);
 
   const buildStudioPayload = (): ReactiveLabSyncPayload | null => {

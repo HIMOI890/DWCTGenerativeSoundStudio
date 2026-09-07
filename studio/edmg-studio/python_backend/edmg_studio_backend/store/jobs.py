@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,7 @@ class JobStore:
                 progress_json=excluded.progress_json,
                 attempt=excluded.attempt,
                 idempotency_key=excluded.idempotency_key
+            WHERE jobs.status IN ('queued', 'paused', 'running')
             """,
             (
                 job.id,
@@ -288,6 +290,9 @@ class JobStore:
         with self._lock:
             job.updated_at = self._now()
             self._upsert_job(job)
+            persisted = self.get(job.project_id, job.id)
+            if persisted is not None:
+                job.__dict__.update(persisted.__dict__)
             self._record_event(
                 job.project_id,
                 job.id,
@@ -296,6 +301,19 @@ class JobStore:
             )
             self._conn.commit()
             self._mirror_json(job)
+
+    @contextmanager
+    def publication_guard(self, project_id: str, job_id: str):
+        """Serialize publication with cancellation across worker processes."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                current = self.get(project_id, job_id)
+                yield bool(current and current.status in ("queued", "running"))
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
 
     def get(self, project_id: str, job_id: str) -> Job | None:
         with self._lock:

@@ -14,8 +14,6 @@ public sealed class WindowsBackendTokenProvider : IBackendTokenProvider
     private readonly IBackendTokenProvider _fallback;
     private readonly SemaphoreSlim _vaultGate = new(1, 1);
 
-    private bool _vaultChecked;
-    private string? _cachedVaultToken;
     private readonly TokenCacheEntry _vaultTokenCache = s_cacheCoordinator.CreateEntry();
 
     public WindowsBackendTokenProvider(IBackendTokenProvider fallback)
@@ -31,9 +29,6 @@ public sealed class WindowsBackendTokenProvider : IBackendTokenProvider
             return environmentToken;
         }
 
-        if (_vaultChecked)
-        {
-            return _cachedVaultToken;
         if (_vaultTokenCache.TryGet(out string? cachedVaultToken))
         {
             return cachedVaultToken;
@@ -42,46 +37,28 @@ public sealed class WindowsBackendTokenProvider : IBackendTokenProvider
         await _vaultGate.WaitAsync(cancellationToken);
         try
         {
-            if (_vaultChecked)
+            while (true)
             {
-                return _cachedVaultToken;
-            if (_vaultTokenCache.TryGet(out cachedVaultToken))
-            {
-                return cachedVaultToken;
+                cancellationToken.ThrowIfCancellationRequested();
+                if (_vaultTokenCache.TryGet(out cachedVaultToken)) return cachedVaultToken;
+                long version = s_cacheCoordinator.CurrentVersion;
+                try
+                {
+                    cachedVaultToken = ResolveStore().ReadToken();
+                }
+                catch
+                {
+                    // Missing credentials are normal; cache absence until Save/clear.
+                    cachedVaultToken = null;
+                }
+                if (_vaultTokenCache.StoreIfCurrent(cachedVaultToken, version)) return cachedVaultToken;
             }
-
-            try
-            {
-                var credential = new PasswordVault().Retrieve(VaultResource, VaultUser);
-                credential.RetrievePassword();
-                _cachedVaultToken = string.IsNullOrWhiteSpace(credential.Password)
-                    ? null
-                    : credential.Password;
-                cachedVaultToken = ResolveStore().ReadToken();
-            }
-            catch
-            {
-                // A missing credential is normal for a local backend that does not
-                // require authentication. Cache that result so every HTTP request
-                // does not repeatedly ask PasswordVault and trigger a first-chance
-                // COMException in the Visual Studio debugger.
-                _cachedVaultToken = null;
-            }
-
-            _vaultChecked = true;
-            return _cachedVaultToken;
-                cachedVaultToken = null;
-            }
-
-            _vaultTokenCache.Store(cachedVaultToken);
-            return cachedVaultToken;
         }
         finally
         {
             _vaultGate.Release();
         }
     }
-
     public static void Save(string? token)
     {
         try

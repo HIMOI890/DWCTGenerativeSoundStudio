@@ -202,7 +202,7 @@ func TestReleaseProofPointersIncludeCoreProofs(t *testing.T) {
 		}
 	}
 }
-func TestStartManagedBackendPersistsStateDuringReadiness(t *testing.T) {
+func TestStartManagedBackendPersistsStateOnlyAfterReadiness(t *testing.T) {
 	repoRoot, _, cleanup := setupManagedBackendTestFixture(t)
 	defer cleanup()
 
@@ -223,16 +223,8 @@ func TestStartManagedBackendPersistsStateDuringReadiness(t *testing.T) {
 	}()
 
 	time.Sleep(300 * time.Millisecond)
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("expected supervisor state during readiness, read err=%v", err)
-	}
-	var pending SupervisorState
-	if err := json.Unmarshal(data, &pending); err != nil {
-		t.Fatalf("unmarshal pending supervisor state: %v", err)
-	}
-	if pending.PID == 0 || pending.AttemptID == "" {
-		t.Fatalf("expected pending supervisor state to capture pid and attempt, got %#v", pending)
+	if fileExists(statePath) {
+		t.Fatal("supervisor state must not be published before readiness")
 	}
 
 	select {
@@ -314,8 +306,8 @@ func TestStartManagedBackendReadinessFailureKillsOnlyManagedChildAndPreservesUnr
 		if outcome.status.Healthy {
 			t.Fatalf("expected failed startup to remain unhealthy")
 		}
-		if !outcome.status.Known {
-			t.Fatalf("expected failed startup to report persisted supervisor state")
+		if outcome.status.Known {
+			t.Fatalf("failed startup must not claim persisted supervisor state")
 		}
 		if outcome.status.State == nil {
 			t.Fatalf("expected failed startup to report launched process details")
@@ -336,7 +328,7 @@ func TestStartManagedBackendReadinessFailureKillsOnlyManagedChildAndPreservesUnr
 
 	waitForCondition(t, 5*time.Second, func() bool {
 		alive, _ := processAlive(childPID)
-		return alive
+		return !alive
 	})
 
 	data, err := os.ReadFile(statePath)

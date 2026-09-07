@@ -41,6 +41,11 @@ from ..schemas import (
 from ..services.live_publishers import publish_status, start_live_publish, stop_live_publish
 from ..store.autosave import AutosaveJournal
 from ..store.projects import ProjectStore
+from ..revisions import RevisionRoute
+from ..project_metadata import (
+    validate_metadata_patch, recoverable_metadata_from_patch,
+    extract_recoverable_metadata, merge_recovery_metadata, MetadataValidationError,
+)
 
 
 def create_system_router(
@@ -75,7 +80,7 @@ def create_project_router(
     def store() -> ProjectStore:
         return get_store()
 
-    router = APIRouter(tags=["projects"])
+    router = APIRouter(tags=["projects"], route_class=RevisionRoute)
 
     @router.get("/v1/projects")
     def list_projects() -> dict[str, Any]:
@@ -439,11 +444,17 @@ def create_project_router(
         proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        meta = dict(proj.meta or {})
-        if isinstance(req.meta, dict) and req.meta:
-            meta.update(req.meta)
+        try:
+            patch = validate_metadata_patch(req.meta or {})
+            meta, ignored = recoverable_metadata_from_patch(proj.meta, patch)
+            if ignored:
+                raise MetadataValidationError("Reserved metadata fields: " + ", ".join(ignored))
+        except MetadataValidationError as exc:
+            raise HTTPException(400, str(exc)) from exc
         if req.timeline is not None:
             meta["timeline"] = req.timeline or {"layers": []}
+        validate_metadata_patch(meta)
+        proj = store().mutate(project_id, lambda current: current.meta.update(meta))
         journal = AutosaveJournal(store().project_dir(project_id))
         payload = journal.write_journal(
             project_id=project_id,
@@ -511,7 +522,12 @@ def create_project_router(
             raise HTTPException(400, "source must be 'journal' or 'snapshot'")
         if not isinstance(payload, dict) or not isinstance(payload.get("meta"), dict):
             raise HTTPException(404, "No valid recovery payload found")
-        proj.meta = dict(payload["meta"])
+        try:
+            recovered = extract_recoverable_metadata(payload["meta"])
+            validate_metadata_patch(recovered)
+            proj.meta, _ = merge_recovery_metadata(proj.meta, recovered)
+        except MetadataValidationError as exc:
+            raise HTTPException(400, str(exc)) from exc
         store().save(proj)
         journal.write_snapshot(project_id=project_id, meta=proj.meta, reason="recovery_applied")
         journal.mark_clean()

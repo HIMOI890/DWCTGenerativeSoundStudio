@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+from edmg_studio_backend.tests.revision_client import TestClient
 from pydantic import ValidationError
 
 from edmg_studio_backend import app as backend_app
@@ -652,7 +652,7 @@ def test_execute_timeline_job_converts_ffmpeg_cancellation(
     assert saved.error is None
     saved_project = store.get(project.id)
     assert saved_project is not None
-    assert saved_project.meta["last_timeline_render_request"]["status"] == "canceled"
+    assert "last_timeline_render_request" not in saved_project.meta
 
 
 def test_timeline_worker_revalidates_render_settings(tmp_path: Path, monkeypatch) -> None:

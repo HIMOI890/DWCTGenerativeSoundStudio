@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hmac
+import hashlib
+import secrets
 import ipaddress
 import os
 import re
@@ -8,6 +10,29 @@ from dataclasses import dataclass
 from typing import Any
 
 from starlette.responses import JSONResponse
+from .media_signing import MediaUrlSigner, match_project_media_request
+
+_PROCESS_MEDIA_KEY = secrets.token_bytes(32)
+
+
+def media_url_ttl_s() -> int:
+    try:
+        value = int(os.getenv("EDMG_MEDIA_URL_TTL_S", "900"))
+    except ValueError as exc:
+        raise ValueError("EDMG_MEDIA_URL_TTL_S must be an integer from 60 to 3600") from exc
+    if not 60 <= value <= 3600:
+        raise ValueError("EDMG_MEDIA_URL_TTL_S must be between 60 and 3600")
+    return value
+
+
+def configured_media_signer(token: str) -> MediaUrlSigner:
+    explicit = os.getenv("EDMG_MEDIA_SIGNING_SECRET", "")
+    key = explicit.encode() if explicit else (
+        hmac.new(token.encode(), b"edmg/studio/media-url/v1", hashlib.sha256).digest()
+        if token else _PROCESS_MEDIA_KEY
+    )
+    previous = os.getenv("EDMG_MEDIA_SIGNING_SECRET_PREVIOUS", "")
+    return MediaUrlSigner(key, [previous.encode()] if previous else [])
 
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -93,7 +118,7 @@ class BackendSecuritySettings:
             cors_origins=origins,
             cors_origin_regex=regex,
             public_media_gets=not str(
-                os.getenv("EDMG_BACKEND_PUBLIC_MEDIA_GETS", "1")
+                os.getenv("EDMG_BACKEND_PUBLIC_MEDIA_GETS", "0")
             ).strip().lower()
             in {"0", "false", "no", "off"},
         )
@@ -131,6 +156,8 @@ class BackendSecuritySettings:
         request_scheme: str = "",
         request_server_host: str | None = None,
     ) -> dict[str, Any]:
+        from dataclasses import asdict
+        from .preview_limits import PreviewBudgetLimits
         scheme = str(request_scheme or "").strip().lower()
         remote_without_auth = self.remote_without_auth_for_server(request_server_host)
         return {
@@ -144,6 +171,11 @@ class BackendSecuritySettings:
             "cors_origins": list(self.cors_origins),
             "cors_origin_regex_configured": bool(self.cors_origin_regex),
             "public_media_gets": self.public_media_gets,
+            "media_url_ttl_s": media_url_ttl_s(),
+            "preview_limits": {
+                "standard": asdict(PreviewBudgetLimits.from_env()),
+                "diffusion": asdict(PreviewBudgetLimits.from_env(diffusion=True)),
+            },
             "transport": scheme or "unknown",
             "transport_secure": scheme == "https",
             "note": (
@@ -195,6 +227,7 @@ class BackendSecurityMiddleware:
     def __init__(self, app: Any, *, settings: BackendSecuritySettings) -> None:
         self.app = app
         self.settings = settings
+        self.media_signer = configured_media_signer(settings.auth_token)
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -203,6 +236,11 @@ class BackendSecurityMiddleware:
 
         path = str(scope.get("path") or "")
         method = str(scope.get("method") or "GET").upper()
+        media = match_project_media_request(path)
+        signed = self.media_signer.validate_request(
+            method=method, path=path, query_string=scope.get("query_string", b""),
+            project_id=media.project_id, purpose=media.purpose,
+        ) if media and method in {"GET", "HEAD"} else None
 
         async def send_with_security_headers(message: dict[str, Any]) -> None:
             if message.get("type") == "http.response.start":
@@ -214,12 +252,10 @@ class BackendSecurityMiddleware:
                     (b"referrer-policy", b"no-referrer"),
                     (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
                 ]
-                if not (
-                    self.settings.public_media_gets
-                    and method in {"GET", "HEAD"}
-                    and _PROJECT_MEDIA_PATH.fullmatch(path)
-                ):
-                    additions.append((b"cache-control", b"no-store"))
+                additions.append((b"cache-control", b"no-store"))
+                if signed and signed.present:
+                    headers = [(name, value) for name, value in headers if name.lower() != b"cache-control"]
+                    existing.discard(b"cache-control")
                 for name, value in additions:
                     if name not in existing:
                         headers.append((name, value))
@@ -243,7 +279,14 @@ class BackendSecurityMiddleware:
             await response(scope, receive, send_with_security_headers)
             return
 
-        if self.settings.auth_required and not _is_public_request(path, method, self.settings):
+        if signed and signed.present and not signed.ok:
+            response = JSONResponse(status_code=401, content={"ok": False, "error": {
+                "code": signed.code, "message": signed.message,
+            }})
+            await response(scope, receive, send_with_security_headers)
+            return
+
+        if self.settings.auth_required and not _is_public_request(path, method, self.settings) and not (signed and signed.ok):
             supplied = _bearer_token(list(scope.get("headers") or []))
             if not supplied or not hmac.compare_digest(supplied, self.settings.auth_token):
                 response = JSONResponse(

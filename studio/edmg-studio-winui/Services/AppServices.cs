@@ -106,16 +106,15 @@ public sealed class AppServices : IAsyncDisposable
             Timeout = Timeout.InfiniteTimeSpan
         };
         var apiClient = new StudioApiClient(supervisor, tokenProvider, apiHttpClient);
+        var projectMediaClient = new StudioProjectMediaClient(apiClient, new StudioApiSignedMediaUrlResolver(apiClient));
 
         return new AppServices(
             configuration,
             supervisor,
             apiClient,
             apiHttpClient,
+            projectMediaClient,
             new StudioSessionService());
-        var apiClient = new StudioApiClient(supervisor, tokenProvider);
-        var projectMediaClient = new StudioProjectMediaClient(apiClient, new StudioApiSignedMediaUrlResolver(apiClient));
-        return new AppServices(configuration, supervisor, apiClient, projectMediaClient, new StudioSessionService());
     }
 
     public async ValueTask DisposeAsync()

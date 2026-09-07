@@ -21,7 +21,7 @@ describe("useSignedProjectMedia", () => {
   });
 
   it("renews before expiry and clears stale URLs when the request scope changes", async () => {
-    const issue = vi.spyOn(api, "issueProjectMediaUrls")
+    vi.spyOn(api, "issueProjectMediaUrls")
       .mockResolvedValueOnce({
         expires_at: (Date.now() + 60_000) / 1_000,
         urls: [{ purpose: "file", url: "https://studio.example/signed/one" }],

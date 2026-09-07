@@ -5,8 +5,23 @@ export const BACKEND_URL_CHANGED_EVENT = "edmg:backend-url-changed";
 const BROWSER_BACKEND_URL_STORAGE_KEY = "edmg.backendUrl";
 let backendAuthToken = "";
 let backendAuthTokenLoaded = false;
+const projectRevisions = new Map<string, number>();
+
+async function trackProjectRevision(response: Response, base: string, path: string): Promise<Response> {
+  if (response.ok && response.headers?.get("content-type")?.includes("application/json") && typeof response.clone === "function") {
+    const data = await response.clone().json().catch(() => null);
+    const match = path.match(/\/v1\/projects\/([^/?]+)/);
+    const project = data?.project;
+    const revision = project?.revision ?? data?.revision;
+    if (match && Number.isInteger(revision) && revision >= 1) {
+      projectRevisions.set(`${base}/${match[1]}`, revision);
+    }
+  }
+  return response;
+}
 
 export type ApiRequestOptions = {
+  backendUrl?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
   expectedRevision?: number | null;
@@ -47,7 +62,7 @@ export class ApiError extends Error {
 function readRevision(...values: unknown[]): number | null {
   for (const value of values) {
     const revision = Number(value);
-    if (Number.isInteger(revision) && revision >= 0) return revision;
+    if (Number.isInteger(revision) && revision >= 1) return revision;
   }
   return null;
 }
@@ -60,6 +75,7 @@ export function isProjectRevisionConflict(error: unknown): error is ApiError {
 }
 
 export type SignedProjectMediaRequest = {
+  preview_kind?: "frame" | "segment" | "diffusion_segment";
   purpose: "file" | "audio" | "preview";
   path?: string;
   query?: Record<string, unknown>;
@@ -321,8 +337,13 @@ export async function apiFetch(
   init: RequestInit = {},
   options: ApiRequestOptions = {},
 ): Promise<Response> {
-  const base = await getBackendUrlAsync();
+  const base = normalizeBackendUrl(options.backendUrl || await getBackendUrlAsync());
   const headers = await backendAuthHeaders(init.headers);
+  const projectMatch = path.match(/\/v1\/projects\/([^/?]+)/);
+  if (projectMatch && ["POST", "PUT", "PATCH", "DELETE"].includes(init.method || "GET")) {
+    const revision = options.expectedRevision ?? projectRevisions.get(`${base}/${projectMatch[1]}`);
+    if (revision != null) headers.set("If-Match", String(revision));
+  }
   const target = new URL(/^https?:\/\//i.test(path) ? path : `${base}${path}`);
   if (target.origin !== new URL(base).origin) {
     throw new Error("Refusing to send Studio backend credentials to a different origin.");
@@ -331,7 +352,7 @@ export async function apiFetch(
   const callerSignal = options.signal ?? init.signal ?? undefined;
   const timeoutMs = Number(options.timeoutMs ?? 0);
   if (!callerSignal && !(timeoutMs > 0)) {
-    return fetch(target.toString(), { ...init, headers });
+    return trackProjectRevision(await fetch(target.toString(), { ...init, headers }), base, path);
   }
 
   const controller = new AbortController();
@@ -351,11 +372,11 @@ export async function apiFetch(
   }
 
   try {
-    return await fetch(target.toString(), {
+    return await trackProjectRevision(await fetch(target.toString(), {
       ...init,
       headers,
       signal: controller.signal,
-    });
+    }), base, path);
   } catch (error) {
     if (timedOut) {
       throw new Error(`Studio backend request timed out after ${timeoutMs} ms`);
@@ -463,7 +484,7 @@ export async function issueProjectMediaUrls(
       throw new Error("Signed media purpose must be file, audio, or preview.");
     }
     const path = String(request.path || "").trim().replace(/\\/g, "/");
-    if ((purpose === "file" || purpose === "audio")
+    if (purpose === "file"
       && (!path || path.startsWith("/") || path.split("/").some((part) => !part || part === ".."))) {
       throw new Error("Invalid project-relative media path.");
     }
@@ -474,18 +495,19 @@ export async function issueProjectMediaUrls(
       purpose,
       ...(path ? { path } : {}),
       ...(request.query ? { query: request.query } : {}),
+      ...(request.preview_kind ? { preview_kind: request.preview_kind } : {}),
     } satisfies SignedProjectMediaRequest;
   });
 
+  const backendUrl = normalizeBackendUrl(options.backendUrl || await getBackendUrlAsync());
   const data = await apiPost(
     `/v1/projects/${encodeURIComponent(safeProjectId)}/media-urls`,
     { requests: normalizedRequests },
-    options,
+    { ...options, backendUrl },
   ) as SignedProjectMediaBatch;
   if (!data || !Array.isArray(data.urls) || data.urls.length !== normalizedRequests.length) {
     throw new Error("Studio returned an invalid signed media URL batch.");
   }
-  const backendUrl = await getBackendUrlAsync();
   const urls = data.urls.map((item, index) => {
     if (!item || item.purpose !== normalizedRequests[index]?.purpose || !String(item.url || "").trim()) {
       throw new Error("Studio returned a signed media URL for an unexpected purpose.");
@@ -493,6 +515,9 @@ export async function issueProjectMediaUrls(
     const resolved = new URL(String(item.url).trim(), `${backendUrl}/`);
     if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
       throw new Error("Studio signed media URLs must use HTTP or HTTPS.");
+    }
+    if (resolved.origin !== new URL(backendUrl).origin) {
+      throw new Error("Studio returned a signed media URL for a different origin.");
     }
     return { purpose: item.purpose, url: resolved.toString() };
   });

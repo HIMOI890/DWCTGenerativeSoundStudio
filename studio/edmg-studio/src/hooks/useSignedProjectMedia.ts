@@ -30,6 +30,7 @@ export function mediaRequestKey(request: SignedProjectMediaRequest): string {
     : undefined;
   return JSON.stringify({
     purpose: request.purpose,
+    preview_kind: request.preview_kind,
     path: request.path || undefined,
     query,
   });
@@ -86,7 +87,7 @@ export function useSignedProjectMedia(
       const requestController = new AbortController();
       controller = requestController;
       setLoading(true);
-      void issueProjectMediaUrls(projectId, stableRequests, { signal: requestController.signal })
+      void issueProjectMediaUrls(projectId, stableRequests, { signal: requestController.signal, backendUrl: normalizedBackendUrl })
         .then((batch) => {
           if (!active || requestController.signal.aborted) return;
           const next = new Map<string, string>();

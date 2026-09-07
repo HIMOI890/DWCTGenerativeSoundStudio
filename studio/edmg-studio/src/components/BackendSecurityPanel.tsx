@@ -15,6 +15,8 @@ type SecurityStatus = {
   cors_origins?: string[];
   cors_origin_regex_configured?: boolean;
   public_media_gets?: boolean;
+  media_url_ttl_s?: number;
+  preview_limits?: { standard?: { max_duration_s: number; max_fps: number }; diffusion?: { max_duration_s: number; max_fps: number } };
   transport?: string;
   transport_secure?: boolean;
   note?: string;
@@ -159,6 +161,9 @@ export default function BackendSecurityPanel({ backendUrl }: { backendUrl: strin
         <div>Encrypted persistence: <b>{window.edmg?.setBackendAuthToken ? (secureStorageAvailable ? "available" : "session-only") : "browser session-only"}</b></div>
         <div>CORS origins: <b>{status?.cors_origins?.length ? status.cors_origins.join(", ") : "status unavailable"}</b></div>
         <div>Native media compatibility: <b>{status?.public_media_gets ? "read-only project media URLs enabled" : "authentication required"}</b></div>
+        <div>Signed media lifetime: <b>{status?.media_url_ttl_s ? `${status.media_url_ttl_s / 60} minutes` : "status unavailable"}</b></div>
+        {status?.preview_limits?.standard && <div>Standard previews: up to {status.preview_limits.standard.max_duration_s}s at {status.preview_limits.standard.max_fps} FPS</div>}
+        {status?.preview_limits?.diffusion && <div>Diffusion previews: up to {status.preview_limits.diffusion.max_duration_s}s at {status.preview_limits.diffusion.max_fps} FPS</div>}
       </div>
 
       <div style={{ display: "grid", gap: 8 }}>

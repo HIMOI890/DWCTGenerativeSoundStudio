@@ -346,6 +346,10 @@ async def _app_lifespan(_app: FastAPI):
 backend_security = BackendSecuritySettings.from_env()
 
 app = FastAPI(title="EDMG Studio Backend", version=STUDIO_VERSION, lifespan=_app_lifespan)
+from .revisions import RevisionRoute
+app.router.route_class = RevisionRoute
+from .api.media import create_media_router, validate_preview
+app.include_router(create_media_router(lambda: store, backend_security))
 
 app.add_middleware(BackendSecurityMiddleware, settings=backend_security)
 
@@ -367,6 +371,8 @@ async def _user_facing_error(_req: Request, exc: UserFacingError):
 
 @app.exception_handler(HTTPException)
 async def _http_exception(_req: Request, exc: HTTPException):
+    if isinstance(exc.detail, dict):
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.detail}, headers=exc.headers)
     msg = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
     hint = hint_from_exception(Exception(msg))
     return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": {"message": msg, "hint": hint, "code": "HTTP_ERROR"}})
@@ -3808,9 +3814,17 @@ def post_project_visual_dna_update(project_id: str, req: VisualDNAUpdateRequest)
     }
 
 
-@app.get("/v1/projects/{project_id}/preview/frame")
+def _validate_preview_request(kind: str, query: dict[str, Any]) -> None:
+    try:
+        validate_preview(kind, query)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.api_route("/v1/projects/{project_id}/preview/frame", methods=["GET", "HEAD"])
 def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, force: int = 0):
     """Render a low-res cached preview frame for timeline scrubbing (no diffusion)."""
+    _validate_preview_request("frame", {"t": t, "w": w, "h": h})
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
@@ -3823,7 +3837,7 @@ def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, f
         logger.exception("Preview image dependency is unavailable")
         raise HTTPException(500, "Preview image dependency is unavailable") from exc
 
-    cache_dir = (pdir / "outputs" / "previews" / f"{int(w)}x{int(h)}").resolve()
+    cache_dir = safe_join(pdir, f"outputs/previews/{int(w)}x{int(h)}")
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = f"t{int(float(t) * 1000):010d}.png"
     out = cache_dir / key
@@ -3840,7 +3854,7 @@ def preview_frame(project_id: str, t: float = 0.0, w: int = 768, h: int = 432, f
     
 
     return FileResponse(str(out), media_type="image/png")
-@app.get("/v1/projects/{project_id}/preview/segment")
+@app.api_route("/v1/projects/{project_id}/preview/segment", methods=["GET", "HEAD"])
 def preview_segment(
     project_id: str,
     start_s: float = 0.0,
@@ -3858,6 +3872,7 @@ def preview_segment(
 
     Cache key includes a hash of the current timeline.
     """
+    _validate_preview_request("segment", {"start_s": start_s, "end_s": end_s, "w": w, "h": h, "fps": fps})
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
@@ -3877,7 +3892,7 @@ def preview_segment(
     fps_i = max(1, min(24, int(fps)))
 
     tl_hash = hashlib.sha1(json.dumps(timeline, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:10]
-    cache_dir = (pdir / "outputs" / "previews" / f"seg_{int(w)}x{int(h)}").resolve()
+    cache_dir = safe_join(pdir, f"outputs/previews/seg_{int(w)}x{int(h)}")
     cache_dir.mkdir(parents=True, exist_ok=True)
     key = f"seg_{int(start*1000):010d}_{int(end*1000):010d}_{fps_i}fps_{tl_hash}.mp4"
     out_mp4 = cache_dir / key
@@ -3940,7 +3955,7 @@ def preview_segment(
 
 
 
-@app.get("/v1/projects/{project_id}/preview/diffusion_segment")
+@app.api_route("/v1/projects/{project_id}/preview/diffusion_segment", methods=["GET", "HEAD"])
 def preview_diffusion_segment(
     project_id: str,
     start_s: float = 0.0,
@@ -3964,6 +3979,7 @@ def preview_diffusion_segment(
       - no audio mux (Timeline page plays audio separately)
       - uses the internal Diffusers engine (SD1.5 / SDXL / SD3.5) if installed
     """
+    _validate_preview_request("diffusion_segment", {"start_s": start_s, "end_s": end_s, "w": w, "h": h, "fps": fps, "steps": steps})
     proj = store.get(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
@@ -3989,8 +4005,8 @@ def preview_diffusion_segment(
 
     fps_i = max(1, min(12, int(fps)))
     steps_i = max(1, min(30, int(steps)))
-    w_i = max(256, min(1536, int(w)))
-    h_i = max(256, min(1536, int(h)))
+    w_i = int(w)
+    h_i = int(h)
 
     # Resolve internal model
     mid = str(model_id or "auto")
@@ -4012,7 +4028,7 @@ def preview_diffusion_segment(
     # Cache
     tl_hash = hashlib.sha1(json.dumps(timeline, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:10]
     p_hash = hashlib.sha1((prompt or "").encode("utf-8")).hexdigest()[:8]
-    cache_dir = (pdir / "outputs" / "previews" / f"diff_{w_i}x{h_i}").resolve()
+    cache_dir = safe_join(pdir, f"outputs/previews/diff_{w_i}x{h_i}")
     cache_dir.mkdir(parents=True, exist_ok=True)
     model_cache_token = _cache_key_token(mid)
     key = f"diff_{int(start*1000):010d}_{int(end*1000):010d}_{fps_i}fps_{steps_i}s_{int(cfg*10):03d}c_{int(strength*100):03d}st_{model_cache_token}_{tl_hash}_{p_hash}.mp4"
@@ -4084,7 +4100,7 @@ else:
         _require_multipart()
 
 
-@app.get("/v1/projects/{project_id}/audio")
+@app.api_route("/v1/projects/{project_id}/audio", methods=["GET", "HEAD"])
 def get_project_audio(project_id: str):
     """Serve the project's primary uploaded audio file (Timeline playback)."""
     proj = store.get(project_id)
@@ -4095,7 +4111,11 @@ def get_project_audio(project_id: str):
     if not fn:
         raise HTTPException(404, "No audio uploaded")
 
-    audio_path = store.project_dir(project_id) / "assets" / "audio" / fn
+    try:
+        safe_join(store.project_dir(project_id), fn)
+        audio_path = safe_join(store.project_dir(project_id), "assets/audio/" + fn)
+    except ValueError as exc:
+        raise HTTPException(400, "Unsafe audio path") from exc
     if not audio_path.exists() or not audio_path.is_file():
         raise HTTPException(404, "Audio file missing on disk")
 
@@ -7359,6 +7379,40 @@ def _public_render_job_error(exc: Exception) -> str:
 
 
 def _execute_job(job):
+    from .revisions import background_context, revision_context, merge_owned_fields
+    state = {"baselines": {}, "pending": []}
+    token = background_context.set(state)
+    revision_token = revision_context.set(None)
+    try:
+        _execute_job_body(job)
+    finally:
+        background_context.reset(token)
+        revision_context.reset(revision_token)
+    try:
+        with jobs.publication_guard(job.project_id, job.id) as active:
+            if active and job.status == "succeeded":
+                def publish(current):
+                    for project_id, baseline, edited in state["pending"]:
+                        if project_id != current.id:
+                            raise ValueError("Job attempted to publish another project")
+                        current.meta = merge_owned_fields(current.meta, baseline, edited)
+                if state["pending"]:
+                    store.mutate(job.project_id, publish)
+                from .store.artifacts import _write_atomic as publish_artifact
+                for artifact_path, artifact_payload in state.get("artifacts", []):
+                    publish_artifact(artifact_path, artifact_payload)
+            elif not active:
+                latest = jobs.get(job.project_id, job.id)
+                if latest:
+                    job.__dict__.update(latest.__dict__)
+            jobs.save(job)
+    except Exception as exc:
+        job.status = "failed"
+        job.error = _public_render_job_error(exc)
+        jobs.save(job)
+
+
+def _execute_job_body(job):
     jobs.append_log(job.project_id, job.id, f"Started job type={job.type}")
 
     try:
@@ -7464,7 +7518,6 @@ def _execute_job(job):
     latest = jobs.get(job.project_id, job.id)
     if latest and isinstance(latest.progress, dict):
         job.progress = latest.progress
-    jobs.save(job)
 
 
 def _job_in_subprocess_enabled() -> bool:
@@ -13813,7 +13866,7 @@ def list_outputs(project_id: str):
         "active_internal_jobs": active_internal_jobs,
     }
 
-@app.get("/v1/projects/{project_id}/file")
+@app.api_route("/v1/projects/{project_id}/file", methods=["GET", "HEAD"])
 def get_file(project_id: str, path: str):
     proj = store.get(project_id)
     if not proj:

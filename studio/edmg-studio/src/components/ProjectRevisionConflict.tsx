@@ -6,7 +6,7 @@ export function expectedRevisionBody<T extends Record<string, unknown>>(
   project: unknown,
 ): T & { expected_revision?: number } {
   const revision = Number((project as { revision?: unknown } | null)?.revision);
-  return Number.isInteger(revision) && revision >= 0
+  return Number.isInteger(revision) && revision >= 1
     ? { ...body, expected_revision: revision }
     : body;
 }
@@ -22,19 +22,19 @@ export function applyResponseRevision<T>(
   if (!current || typeof current !== "object" || !response || typeof response !== "object") return current;
   const payload = response as Record<string, any>;
   const revision = Number(payload.revision ?? payload.project?.revision);
-  if (!Number.isInteger(revision) || revision < 0) return current;
+  if (!Number.isInteger(revision) || revision < 1) return current;
   return { ...(current as Record<string, unknown>), revision } as T;
 }
 
 export function responseRevision(response: unknown, fallback: number | null = null): number | null {
   const payload = response && typeof response === "object" ? response as Record<string, any> : {};
   const revision = Number(payload.revision ?? payload.project?.revision);
-  return Number.isInteger(revision) && revision >= 0 ? revision : fallback;
+  return Number.isInteger(revision) && revision >= 1 ? revision : fallback;
 }
 
 export function projectRevision(project: unknown): number | null {
   const revision = Number((project as { revision?: unknown } | null)?.revision);
-  return Number.isInteger(revision) && revision >= 0 ? revision : null;
+  return Number.isInteger(revision) && revision >= 1 ? revision : null;
 }
 
 export function projectRevisionFromResponse(response: unknown): number | null {

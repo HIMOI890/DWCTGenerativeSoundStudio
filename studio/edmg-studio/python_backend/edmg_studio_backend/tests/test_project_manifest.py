@@ -26,7 +26,7 @@ def test_validate_and_migrate_legacy_project_document() -> None:
     }
     migrated, changed, applied = migrate_project_document(legacy)
     assert changed is True
-    assert applied == [1]
+    assert applied == [1, 2]
     assert migrated["schema_version"] == CURRENT_SCHEMA_VERSION
     validated = validate_project_document(migrated)
     assert validated["name"] == "Legacy"
@@ -75,6 +75,8 @@ def test_project_store_save_is_atomic_and_versioned(tmp_path: Path) -> None:
         id=proj.id,
         name="Atomic",
         created_at=proj.created_at,
+        updated_at=proj.updated_at,
+        revision=proj.revision,
         meta={"width": 1280},
         schema_version=CURRENT_SCHEMA_VERSION,
     )

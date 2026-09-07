@@ -288,12 +288,12 @@ def _resolve_target_python(
     resolved_venv = _resolve_path(venv) if venv else None
     resolved_python: Optional[Path] = None
 
-    if normalized_python:
+    if normalized_python or resolved_venv is not None:
         if uv is None:
             raise RuntimeError(
                 "uv is required to resolve a requested Python interpreter"
             )
-        resolved_python = _resolve_requested_python(uv, normalized_python, env=env)
+        resolved_python = _resolve_requested_python(uv, normalized_python or _required_python_version(), env=env)
 
     if resolved_venv is not None:
         python_request = (

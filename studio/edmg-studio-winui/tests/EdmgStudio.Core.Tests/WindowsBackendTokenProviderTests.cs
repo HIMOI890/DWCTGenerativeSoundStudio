@@ -6,6 +6,17 @@ namespace EdmgStudio.Core.Tests;
 public sealed class WindowsBackendTokenProviderTests
 {
     [TestMethod]
+    public void InFlightLookupCannotRepopulateAfterSave()
+    {
+        var coordinator = new ProcessWideTokenCacheCoordinator();
+        TokenCacheEntry entry = coordinator.CreateEntry();
+        long version = coordinator.CurrentVersion;
+        coordinator.Invalidate();
+        Assert.IsFalse(entry.StoreIfCurrent("stale", version));
+        Assert.IsFalse(entry.TryGet(out _));
+    }
+
+    [TestMethod]
     public void InvalidateClearsCachedAbsenceAcrossEntries()
     {
         var coordinator = new ProcessWideTokenCacheCoordinator();

@@ -24,6 +24,12 @@ def _sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str | None:
 
 
 def _write_atomic(path: Path, payload: dict[str, Any]) -> None:
+    from ..revisions import background_context
+    from copy import deepcopy
+    background = background_context.get()
+    if background is not None:
+        background.setdefault("artifacts", []).append((path, deepcopy(payload)))
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     text = json.dumps(payload, ensure_ascii=False, indent=2)

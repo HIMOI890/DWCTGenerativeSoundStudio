@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -766,14 +765,7 @@ func StartManagedBackend(repoRoot, host string, port int, waitTimeout time.Durat
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			HideWindow:    true,
-			CreationFlags: 0x00000008 | 0x00000200,
-		}
-	} else {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
+	configureProcessGroup(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return SupervisorStatus{}, err
@@ -1381,43 +1373,6 @@ func processAlive(pid int) (bool, error) {
 		return false, nil
 	}
 	return true, nil
-}
-
-func stopProcessTree(pid int, force bool) error {
-	if pid <= 0 {
-		return nil
-	}
-	if runtime.GOOS == "windows" {
-		cmd := exec.Command("taskkill", "/PID", fmt.Sprintf("%d", pid), "/T", "/F")
-		if err := cmd.Run(); err != nil {
-			alive, aliveErr := processAlive(pid)
-			if aliveErr == nil && !alive {
-				return nil
-			}
-			if aliveErr != nil {
-				return fmt.Errorf("re-check launched process %d: %w", pid, aliveErr)
-			}
-			return err
-		}
-		return nil
-	}
-	signal := syscall.SIGTERM
-	if force {
-		signal = syscall.SIGKILL
-	}
-	if err := syscall.Kill(-pid, signal); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			alive, aliveErr := processAlive(pid)
-			if aliveErr == nil && !alive {
-				return nil
-			}
-			if aliveErr != nil {
-				return fmt.Errorf("re-check launched process %d: %w", pid, aliveErr)
-			}
-		}
-		return err
-	}
-	return nil
 }
 
 func cleanupManagedBackendLaunch(cmd *exec.Cmd, waitCh <-chan error, state *SupervisorState) error {

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from edmg_studio_backend.tests.revision_client import TestClient
 
 from edmg_studio_backend.api.routers import create_project_router
 from edmg_studio_backend.store.projects import ProjectStore
