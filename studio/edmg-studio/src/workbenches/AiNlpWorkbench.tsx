@@ -621,7 +621,7 @@ function normalizePlannerContinuity(scenes: PromptScene[]): PromptScene[] {
     const characterLock = sharedCharacterLock || scene.characterLock;
     const styleLock = sharedStyleLock || scene.styleLock;
     const startStateSource = index > 0 && previousEndState ? previousEndState : scene.startState;
-    const startState = replacePlannerContractValue(
+    const startState = previousEndState || replacePlannerContractValue(
       startStateSource,
       scene.characterLock,
       characterLock,
@@ -1756,6 +1756,27 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
     });
   };
 
+  const editContinuityField = (sceneId: number, field: 'setting' | 'shotType' | 'characterLock' | 'styleLock' | 'startState' | 'endState', value: string): void => {
+    setPlan((current) => {
+      if (!current) return current;
+      const index = current.scenes.findIndex((scene) => scene.id === sceneId);
+      if (index < 0 || current.scenes[index].locked) return current;
+      const scenes = current.scenes.map((scene, sceneIndex) => {
+        const targetField = field === 'startState' && sceneIndex === index - 1 ? 'endState' : field;
+        const applies = sceneIndex === index || field === 'characterLock' || field === 'styleLock'
+          || (field === 'startState' && sceneIndex === index - 1);
+        if (!applies) return scene;
+        return { ...scene, [targetField]: value,
+          text: replacePlannerContractValue(scene.text, scene[targetField], value),
+          approved: false, status: 'draft' as const };
+      });
+      const normalized = normalizePlannerContinuity(scenes);
+      return { ...current, scenes: normalized,
+        scenePlan: synchronizePlannerScenePlan(current.scenePlan, normalized),
+        renderManifest: buildRenderManifest(normalized, target, aspectRatio) };
+    });
+  };
+
   const exportHandoffManifest = (): void => {
     if (!analysis || !plan) return;
     downloadText(
@@ -2143,6 +2164,18 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
                   <div className="mb-3 rounded-2xl border border-blue-100 bg-blue-50 p-3 text-sm text-slate-700">
                     <div className="mb-2 font-semibold text-blue-900">Storyboard continuity contract</div>
                     <div className="grid gap-2 md:grid-cols-2">
+                      <fieldset disabled={scene.locked} className="space-y-2">
+                        <legend>Edit continuity (sync to save)</legend>
+                        <p>Character and style locks apply to the sequence. A start-state edit also updates the preceding scene’s end state.</p>
+                        {(['setting', 'shotType', 'characterLock', 'styleLock', 'startState', 'endState'] as const).map((field) => (
+                          <label key={field} className="block">
+                            <span>{({ setting: 'Setting', shotType: 'Shot type', characterLock: 'Character lock', styleLock: 'Style lock', startState: 'Start state', endState: 'End state' })[field]}</span>
+                            <input aria-label={`Scene ${scene.id} ${field}`} value={scene[field]}
+                              onChange={(event) => editContinuityField(scene.id, field, event.target.value)}
+                              className="block w-full rounded border border-slate-300 px-2 py-1" />
+                          </label>
+                        ))}
+                      </fieldset>
                       <div><strong>Setting:</strong> {scene.setting}</div>
                       <div><strong>Shot type:</strong> {scene.shotType}</div>
                       <div><strong>Character lock:</strong> {scene.characterLock}</div>

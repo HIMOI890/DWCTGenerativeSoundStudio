@@ -470,12 +470,12 @@ public static class WorkspaceModelHelpers
             reordered.Insert(targetIndex, scene);
         }
 
-        return reordered
+        return NormalizeStoryboardContinuity(reordered
             .Select((scene, index) => CloneScene(
                 scene,
                 startSeconds: timingSlots[index].StartSeconds,
                 endSeconds: timingSlots[index].EndSeconds))
-            .ToArray();
+            .ToArray());
     }
 
     public static PlanSceneDto CloneScene(
@@ -501,6 +501,17 @@ public static class WorkspaceModelHelpers
         bool replaceStoryboardFields = false)
     {
         ArgumentNullException.ThrowIfNull(scene);
+        if (replaceStoryboardFields)
+        {
+            prompt ??= scene.Prompt;
+            foreach (var (previous, next) in new[] {
+                (scene.Setting, setting), (scene.ShotType, shotType),
+                (scene.CharacterLock, characterLock), (scene.StyleLock, styleLock),
+                (scene.StartState, startState), (scene.EndState, endState) })
+            {
+                prompt = ReplaceStoryboardContractValue(prompt, previous, next);
+            }
+        }
         return new PlanSceneDto
         {
             StartSeconds = startSeconds ?? scene.StartSeconds,
@@ -548,7 +559,7 @@ public static class WorkspaceModelHelpers
             string? startStateSource = string.IsNullOrWhiteSpace(previousEndState)
                 ? scene.StartState
                 : previousEndState;
-            string? startState = ReplaceStoryboardContractValue(
+            string? startState = previousEndState ?? ReplaceStoryboardContractValue(
                 startStateSource,
                 scene.CharacterLock,
                 characterLock);

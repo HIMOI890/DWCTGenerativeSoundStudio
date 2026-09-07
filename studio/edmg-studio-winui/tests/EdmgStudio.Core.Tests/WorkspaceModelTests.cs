@@ -7,6 +7,33 @@ namespace EdmgStudio.Core.Tests;
 public sealed class WorkspaceModelTests
 {
     [TestMethod]
+    public void MoveScene_RoundTripsExactHandoffsWithoutMutatingSource()
+    {
+        PlanSceneDto[] scenes = Enumerable.Range(0, 3).Select(index => new PlanSceneDto
+        {
+            StartSeconds = index * 4, EndSeconds = (index + 1) * 4,
+            Setting = $"station {index}", ShotType = "tracking",
+            CharacterLock = "driver", StyleLock = "silver grain",
+            StartState = $"start {index}", EndState = $"end {index}",
+            Prompt = $"Start state: start {index}. End state: end {index}.",
+        }).ToArray();
+        var moved = WorkspaceModelHelpers.MoveScene(scenes, 2, -2);
+        var request = new UpdatePlanVariantRequest { Scenes = moved };
+        var json = JsonSerializer.Serialize(request, StudioJson.GetTypeInfo<UpdatePlanVariantRequest>());
+        var reloaded = JsonSerializer.Deserialize(json, StudioJson.GetTypeInfo<UpdatePlanVariantRequest>())!.Scenes;
+        Assert.AreEqual("station 2", reloaded[0].Setting);
+        Assert.AreEqual("tracking", reloaded[0].ShotType);
+        Assert.AreEqual("driver", reloaded[0].CharacterLock);
+        Assert.AreEqual("silver grain", reloaded[0].StyleLock);
+        for (int index = 1; index < reloaded.Count; index++)
+        {
+            Assert.AreEqual(reloaded[index - 1].EndState, reloaded[index].StartState);
+            StringAssert.Contains(reloaded[index].Prompt, $"Start state: {reloaded[index - 1].EndState}.");
+        }
+        Assert.AreEqual("start 0", scenes[0].StartState);
+    }
+
+    [TestMethod]
     public void ClampVariantIndex_UsesAvailableVariantRange()
     {
         Assert.AreEqual(0, WorkspaceModelHelpers.ClampVariantIndex(-4, 3));

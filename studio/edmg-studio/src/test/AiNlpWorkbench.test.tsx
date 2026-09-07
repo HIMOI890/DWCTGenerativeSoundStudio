@@ -99,9 +99,10 @@ describe("AiNlpWorkbench shared-session hydration", () => {
     // Subject focus is derived from the transcript too.
     expect(screen.getByDisplayValue(/embodying A late night drive/i)).toBeTruthy();
     // Handoff message tells the user no re-upload is required.
-    expect(screen.getByText(/no need to re-upload/i)).toBeTruthy();
+    expect(screen.getByText(/no audio download is needed/i)).toBeTruthy();
     // With session analysis hydrated, planning works without a local file.
-    expect(screen.getByRole("button", { name: /Plan from session analysis/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: /^Setup/i }));
+    expect(screen.getByRole("button", { name: /Regenerate plan/i })).toBeTruthy();
   });
 
   it("surfaces structured continuity fields and syncs exact end-to-start handoffs", async () => {
@@ -138,6 +139,41 @@ describe("AiNlpWorkbench shared-session hydration", () => {
     expect(payload.plan.scenes[1].characterLock).toBe(payload.plan.scenes[0].characterLock);
     expect(payload.plan.scenes[1].styleLock).toBe(payload.plan.scenes[0].styleLock);
     expect(payload.plan.scenes[1].startState).not.toContain("Mismatched start state");
+  });
+
+  it("edits all continuity fields, syncs them, and reloads the saved canonical scenes", async () => {
+    installEdmgBridge();
+    installFetchMock({ "/v1/projects/p1/audio": {} });
+    const onSyncToStudio = vi.fn().mockResolvedValue("Saved");
+    const props = { compact: true, studioProjectId: "p1", studioSelectedVariant: 0, onSyncToStudio };
+    const view = renderWithStudio(<AiNlpWorkbench {...props} studioProject={studioProject()} />);
+    await screen.findByText(/Executive AI plan/i);
+    const values = { setting: "East station platform", shotType: "Close tracking shot", characterLock: "Driver with a red scarf", styleLock: "Silver grain", startState: "Driver beside the gate", endState: "Driver touches the door" };
+    for (const [field, value] of Object.entries(values)) {
+      fireEvent.change(screen.getByLabelText(`Scene 1 ${field}`), { target: { value } });
+    }
+    values.endState = "Driver holds the door open";
+    fireEvent.change(screen.getByLabelText("Scene 2 startState"), { target: { value: values.endState } });
+    expect((screen.getByLabelText("Scene 1 endState") as HTMLInputElement).value).toBe(values.endState);
+    fireEvent.click(screen.getByRole("button", { name: /Sync to internal renderer/i }));
+    await waitFor(() => expect(onSyncToStudio).toHaveBeenCalledTimes(1));
+    const scenes = onSyncToStudio.mock.calls[0][0].plan.scenes;
+    expect(scenes[0]).toMatchObject(values);
+    expect(scenes[1].startState).toBe(values.endState);
+    expect(scenes[1].characterLock).toBe(values.characterLock);
+    expect(scenes[1].styleLock).toBe(values.styleLock);
+    const project = studioProject();
+    project.meta.last_plan.variants[0].scenes = scenes.map((scene: any) => ({
+      ...scene, prompt: scene.text, setting: scene.setting, shot_type: scene.shotType,
+      character_lock: scene.characterLock, style_lock: scene.styleLock,
+      start_state: scene.startState, end_state: scene.endState,
+    }));
+    view.unmount();
+    renderWithStudio(<AiNlpWorkbench {...props} studioProject={project} />);
+    await screen.findByText(/Executive AI plan/i);
+    for (const [field, value] of Object.entries(values)) {
+      expect((screen.getByLabelText(`Scene 1 ${field}`) as HTMLInputElement).value).toBe(value);
+    }
   });
 
   it("keeps locked-scene contracts coherent when regenerating the surrounding storyboard", async () => {

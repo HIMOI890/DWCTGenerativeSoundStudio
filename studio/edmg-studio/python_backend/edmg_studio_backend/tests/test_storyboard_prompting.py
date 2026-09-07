@@ -20,6 +20,44 @@ from edmg_studio_backend.services.deforum_normalize import (
 from edmg_studio_backend.services.internal_video import InternalVideoSettings
 
 
+def test_variant_save_reload_and_reorder_preserve_authored_contract(tmp_path, monkeypatch):
+    from edmg_studio_backend.store.projects import ProjectStore
+
+    project_store = ProjectStore(tmp_path / "projects")
+    monkeypatch.setattr(app_module, "store", project_store)
+    project = project_store.create("Continuity persistence")
+    scenes = [
+        {
+            "start_s": index * 4, "end_s": (index + 1) * 4,
+            "setting": f"platform {index}", "shot_type": "close tracking",
+            "character_lock": "driver with a red scarf", "style_lock": "silver grain",
+            "start_state": f"start {index}", "end_state": f"end {index}. Facing right",
+            "prompt": f"Authored action. Setting: old platform. Start state: stale {index}. End state: old end.",
+        } for index in range(3)
+    ]
+    project.meta["last_plan"] = {"variants": [{"scenes": scenes}], "duration_s": 12}
+    project_store.save(project)
+    request_type = app_module.StoryboardVariantUpdateRequest
+    app_module.update_plan_variant(project.id, request_type(variant_index=0, scenes=scenes))
+    saved = ProjectStore(tmp_path / "projects").get(project.id).meta["last_plan"]["variants"][0]["scenes"]
+    for index, scene in enumerate(saved):
+        for field in ("setting", "shot_type", "character_lock", "style_lock", "end_state"):
+            assert scene[field] == scenes[index][field]
+        assert scene["start_state"] == (saved[index - 1]["end_state"] if index else "start 0")
+        assert "stale" not in scene["prompt"]
+        assert "old platform" not in scene["prompt"]
+    reordered = [dict(saved[index], start_s=slot * 4, end_s=(slot + 1) * 4)
+                 for slot, index in enumerate((2, 0, 1))]
+    app_module.update_plan_variant(project.id, request_type(variant_index=0, scenes=reordered))
+    reloaded = ProjectStore(tmp_path / "projects").get(project.id).meta["last_plan"]["variants"][0]["scenes"]
+    assert [scene["setting"] for scene in reloaded] == ["platform 2", "platform 0", "platform 1"]
+    for index, scene in enumerate(reloaded):
+        assert scene["storyboard"]["start_state"] == scene["start_state"]
+        assert f"start state: {scene['start_state']}." in scene["prompt"]
+        if index:
+            assert scene["start_state"] == reloaded[index - 1]["end_state"]
+
+
 def test_rule_based_planner_outputs_motion_and_continuity_storyboard_contract() -> None:
     response = RuleBasedPlanner().plan(
         PlanRequest(

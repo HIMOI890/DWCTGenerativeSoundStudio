@@ -6259,6 +6259,21 @@ def _enrich_normalized_plan(plan: dict[str, Any], analysis: dict[str, Any]) -> d
                 (("continuity:",), f"continuity: {continuity}."),
                 (("transition:",), f"transition: {transition}."),
             )
+            # Structured fields are authoritative after editing or reordering.
+            # Replace complete labeled clauses, including values containing periods.
+            labels = [marker for markers, _ in structured_additions for marker in markers]
+            boundary = "|".join(re.escape(label) for label in labels)
+            for markers, addition in structured_additions:
+                if markers[0] not in {"setting:", "shot composition:", "character lock:",
+                                      "style lock:", "start state:", "end state:"}:
+                    continue
+                pattern = (
+                    r"(?:" + "|".join(re.escape(marker) for marker in markers) + r")\s*.*?"
+                    r"(?=\s+(?:" + boundary + r"|section role |staging |palette emphasis |scene motifs |narrative cue )|$)"
+                )
+                prompt = re.sub(pattern, lambda _, replacement=addition: replacement,
+                                prompt, flags=re.IGNORECASE | re.DOTALL)
+            prompt_lower = prompt.lower()
             for markers, addition in structured_additions:
                 if not any(marker in prompt_lower for marker in markers):
                     additions.append(addition)

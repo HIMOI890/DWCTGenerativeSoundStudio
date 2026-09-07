@@ -743,6 +743,21 @@ public sealed partial class AiPlannerLabPage : Page
             return;
         }
 
+        var previous = variant.Scenes[_selectedSceneIndex];
+        if (_selectedSceneIndex > 0 && replacement.StartState != previous.StartState)
+        {
+            var predecessor = variant.Scenes[_selectedSceneIndex - 1];
+            variant.Scenes[_selectedSceneIndex - 1] = WorkspaceModelHelpers.CloneScene(
+                predecessor,
+                setting: predecessor.Setting, shotType: predecessor.ShotType,
+                characterLock: predecessor.CharacterLock, styleLock: predecessor.StyleLock,
+                startState: predecessor.StartState, endState: replacement.StartState,
+                subject: predecessor.Subject, action: predecessor.Action,
+                camera: predecessor.Camera, motion: predecessor.Motion,
+                environmentMotion: predecessor.EnvironmentMotion,
+                continuity: predecessor.ContinuityInstruction, transition: predecessor.Transition,
+                replaceStoryboardFields: true);
+        }
         variant.Scenes[_selectedSceneIndex] = replacement;
         var normalizedScenes = WorkspaceModelHelpers.NormalizeStoryboardContinuity(
             variant.Scenes,
