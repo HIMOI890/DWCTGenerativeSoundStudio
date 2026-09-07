@@ -1,5 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Net;
+using System.Net.Http;
+using System.Net.Sockets;
 using System.Text.Json;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
@@ -61,7 +64,7 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             _lifetimeCts?.Token ?? CancellationToken.None);
-        await RefreshPageAsync(refreshDiagnostics: true, linkedCts.Token);
+        _ = await RefreshPageAsync(refreshDiagnostics: true, linkedCts.Token);
     }
 
     private async void SetupPage_Loaded(object sender, RoutedEventArgs e)
@@ -73,7 +76,7 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
 
         try
         {
-            await RefreshPageAsync(refreshDiagnostics: true, lifetimeCts.Token);
+            _ = await RefreshPageAsync(refreshDiagnostics: true, lifetimeCts.Token);
             _ = PollTasksAsync(lifetimeCts.Token);
         }
         catch (OperationCanceledException) when (lifetimeCts.IsCancellationRequested)
@@ -88,45 +91,47 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         _lifetimeCts = null;
     }
 
-    private async Task RefreshPageAsync(bool refreshDiagnostics, CancellationToken cancellationToken)
+    private async Task<bool> RefreshPageAsync(bool refreshDiagnostics, CancellationToken cancellationToken)
     {
         if (_refreshing)
         {
-            return;
+            return false;
         }
 
         _refreshing = true;
-        RefreshButton.IsEnabled = false;
-        SetupInfoBar.IsOpen = false;
-        SetupProgress.IsActive = true;
-        BackendReadinessText.Text = "Backend: checking...";
+        await SetRefreshStateAsync(refreshing: true);
 
         try
         {
-            await App.Services.BackendSupervisor.RefreshHealthAsync(cancellationToken);
-            var snapshot = App.Services.BackendSupervisor.Status;
-            UpdateBackendSnapshot(snapshot);
+            BackendStatus snapshot = await RefreshBackendSnapshotAsync(cancellationToken);
+            if (!snapshot.IsReady)
+            {
+                await ShowBackendHealthAsync(snapshot);
+                return false;
+            }
 
             var setup = await App.Services.ApiClient.GetSetupStatusAsync(
                 refresh: refreshDiagnostics,
                 includeOptional: true,
                 cancellationToken: cancellationToken);
-            UpdateSetupStatus(setup);
-            UpdateTasks(setup.Tasks);
-        }
-        catch (StudioApiException exception)
-        {
-            ShowError(StudioPageHelpers.GetErrorMessage(exception));
+            await UpdateSetupStatusAsync(setup);
+            await UpdateTasksAsync(setup.Tasks);
+            return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            await ShowCancellationAsync("Setup refresh", cancellationToken);
             throw;
+        }
+        catch (Exception exception)
+        {
+            await PresentFailureAsync(exception, cancellationToken, "Setup failed");
+            return false;
         }
         finally
         {
             _refreshing = false;
-            RefreshButton.IsEnabled = true;
-            SetupProgress.IsActive = false;
+            await SetRefreshStateAsync(refreshing: false);
         }
     }
 
@@ -134,14 +139,14 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            var isActive = _tasks.Any(task => task.CanCancel);
+            var isActive = _hadActiveTasks;
             try
             {
                 var response = await App.Services.ApiClient.GetSetupTasksAsync(cancellationToken);
                 var becameIdle = _hadActiveTasks && !response.Active;
                 _hadActiveTasks = response.Active;
                 isActive = response.Active;
-                UpdateTasks(response.Tasks);
+                await UpdateTasksAsync(response.Tasks);
 
                 if (becameIdle)
                 {
@@ -149,16 +154,17 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
                         refresh: true,
                         includeOptional: true,
                         cancellationToken: cancellationToken);
-                    UpdateSetupStatus(setup);
+                    await UpdateSetupStatusAsync(setup);
                 }
-            }
-            catch (StudioApiException exception)
-            {
-                ShowError(StudioPageHelpers.GetErrorMessage(exception));
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                await ShowCancellationAsync("Task polling", cancellationToken);
                 break;
+            }
+            catch (Exception exception)
+            {
+                await PresentFailureAsync(exception, cancellationToken, "Task refresh failed");
             }
 
             try
@@ -167,6 +173,7 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                await ShowCancellationAsync("Task polling", cancellationToken);
                 break;
             }
         }
@@ -267,14 +274,15 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         {
             var response = await App.Services.ApiClient.GetSetupTasksAsync(cancellationToken);
             _hadActiveTasks = response.Active;
-            UpdateTasks(response.Tasks);
-        }
-        catch (StudioApiException ex)
-        {
-            ShowError(StudioPageHelpers.GetErrorMessage(ex));
+            await UpdateTasksAsync(response.Tasks);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            await ShowCancellationAsync("Task refresh", cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            await PresentFailureAsync(exception, cancellationToken, "Task refresh failed");
         }
     }
 
@@ -292,17 +300,21 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         var cancellationToken = _lifetimeCts?.Token ?? CancellationToken.None;
         try
         {
-            SetupInfoBar.IsOpen = false;
+            await ClearStatusAsync();
             await action(cancellationToken);
-            await RefreshPageAsync(refreshDiagnostics: false, cancellationToken);
-            ShowSuccess(successMessage);
-        }
-        catch (InvalidOperationException ex)
-        {
-            ShowError(ex.Message);
+            bool refreshed = await RefreshPageAsync(refreshDiagnostics: false, cancellationToken);
+            if (refreshed)
+            {
+                await ShowSuccessAsync(successMessage);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            await ShowCancellationAsync("Backend action", cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            await PresentFailureAsync(exception, cancellationToken, "Backend action failed");
         }
     }
 
@@ -313,14 +325,14 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         try
         {
             WindowsBackendTokenProvider.Save(string.IsNullOrWhiteSpace(token) ? null : token);
-            BackendTokenBox.Password = string.Empty;
-            ShowSuccess(string.IsNullOrWhiteSpace(token)
-                ? "The saved backend token was cleared. Environment-provided tokens are unchanged."
-                : "The backend token was stored securely. Restart Studio to apply the credential.");
+            await ClearTokenBoxAsync();
+            await ShowSuccessAsync(string.IsNullOrWhiteSpace(token)
+                ? "The saved backend token was cleared. Environment-provided tokens are unchanged. New requests use the updated credential state immediately."
+                : "The backend token was stored securely. New Studio requests use it immediately.");
         }
         catch (InvalidOperationException ex)
         {
-            ShowError(ex.Message);
+            await ShowErrorAsync(ex.Message);
         }
     }
 
@@ -329,15 +341,13 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         try
         {
             WindowsBackendTokenProvider.Save(null);
-            BackendTokenBox.Password = string.Empty;
-            ShowSuccess("The saved backend token was cleared. Environment-provided tokens are unchanged. Restart Studio to apply the change.");
+            await ClearTokenBoxAsync();
+            await ShowSuccessAsync("The saved backend token was cleared. Environment-provided tokens are unchanged. New requests use the updated credential state immediately.");
         }
         catch (InvalidOperationException ex)
         {
-            ShowError(ex.Message);
+            await ShowErrorAsync(ex.Message);
         }
-
-        await Task.CompletedTask;
     }
 
     private async void ResetBackend_Click(object sender, RoutedEventArgs e)
@@ -366,12 +376,12 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
             var restartResult = AppInstance.Restart("--backend-reset");
             if (!string.Equals(restartResult.ToString(), "RestartPending", StringComparison.Ordinal))
             {
-                ShowError($"The target was reset, but Studio could not restart ({restartResult}). Close and reopen Studio.");
+                await ShowErrorAsync($"The target was reset, but Studio could not restart ({restartResult}). Close and reopen Studio.");
             }
         }
         catch (InvalidOperationException ex)
         {
-            ShowError(ex.Message);
+            await ShowErrorAsync(ex.Message);
         }
     }
 
@@ -384,7 +394,7 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException)
         {
-            ShowError(ex.Message);
+            await ShowErrorAsync(ex.Message);
         }
     }
 
@@ -458,8 +468,8 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
 
         var cancellationToken = _lifetimeCts?.Token ?? CancellationToken.None;
         _requestingAction = true;
-        StudioPageHelpers.SetControlsEnabled(ActionsCard, enabled: false);
-        SetupInfoBar.IsOpen = false;
+        await SetActionsEnabledAsync(enabled: false);
+        await ClearStatusAsync();
         try
         {
             var response = await App.Services.ApiClient.StopPortableComfyUiAsync(cancellationToken);
@@ -468,31 +478,24 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
                 throw new InvalidOperationException("The backend did not confirm that ComfyUI was stopped.");
             }
 
-            ShowSuccess("Portable ComfyUI stop requested.");
+            await ShowSuccessAsync("Portable ComfyUI stop requested.");
             var setup = await App.Services.ApiClient.GetSetupStatusAsync(
                 refresh: true,
                 includeOptional: true,
                 cancellationToken: cancellationToken);
-            UpdateSetupStatus(setup);
-        }
-        catch (StudioApiException ex)
-        {
-            ShowError(StudioPageHelpers.GetErrorMessage(ex));
-        }
-        catch (ArgumentException ex)
-        {
-            ShowError(ex.Message);
-        }
-        catch (InvalidOperationException ex)
-        {
-            ShowError(ex.Message);
+            await UpdateSetupStatusAsync(setup);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            await ShowCancellationAsync("Portable ComfyUI stop", cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            await PresentFailureAsync(exception, cancellationToken, "Portable ComfyUI stop failed");
         }
         finally
         {
-            StudioPageHelpers.SetControlsEnabled(ActionsCard, enabled: true);
+            await SetActionsEnabledAsync(enabled: true);
             _requestingAction = false;
         }
     }
@@ -508,8 +511,8 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
 
         var cancellationToken = _lifetimeCts?.Token ?? CancellationToken.None;
         _requestingAction = true;
-        StudioPageHelpers.SetControlsEnabled(ActionsCard, enabled: false);
-        SetupInfoBar.IsOpen = false;
+        await SetActionsEnabledAsync(enabled: false);
+        await ClearStatusAsync();
         try
         {
             var response = await action(cancellationToken);
@@ -519,27 +522,20 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
             }
 
             _hadActiveTasks = response.Task.IsActive;
-            ShowSuccess($"{actionName} queued as task {response.Task.Id}.");
+            await ShowSuccessAsync($"{actionName} queued as task {response.Task.Id}.");
             await RefreshTasksNowAsync();
-        }
-        catch (StudioApiException ex)
-        {
-            ShowError(StudioPageHelpers.GetErrorMessage(ex));
-        }
-        catch (ArgumentException ex)
-        {
-            ShowError(ex.Message);
-        }
-        catch (InvalidOperationException ex)
-        {
-            ShowError(ex.Message);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            await ShowCancellationAsync(actionName, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            await PresentFailureAsync(exception, cancellationToken, $"{actionName} failed");
         }
         finally
         {
-            StudioPageHelpers.SetControlsEnabled(ActionsCard, enabled: true);
+            await SetActionsEnabledAsync(enabled: true);
             _requestingAction = false;
         }
     }
@@ -560,19 +556,16 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
                 throw new InvalidOperationException($"The backend did not accept cancellation for task {taskId}.");
             }
 
-            ShowSuccess($"Cancellation requested for {response.Task.Name}.");
+            await ShowSuccessAsync($"Cancellation requested for {response.Task.Name}.");
             await RefreshTasksNowAsync();
-        }
-        catch (StudioApiException ex)
-        {
-            ShowError(StudioPageHelpers.GetErrorMessage(ex));
-        }
-        catch (InvalidOperationException ex)
-        {
-            ShowError(ex.Message);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            await ShowCancellationAsync($"Cancellation for task {taskId}", cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            await PresentFailureAsync(exception, cancellationToken, "Task cancellation failed");
         }
     }
 
@@ -680,21 +673,206 @@ public sealed partial class SetupPage : Page, IStudioRefreshable
             : string.Join(Environment.NewLine, candidates);
     }
 
-    private void ShowSuccess(string message)
+    private async Task<BackendStatus> RefreshBackendSnapshotAsync(CancellationToken cancellationToken)
     {
-        SetupInfoBar.Severity = InfoBarSeverity.Success;
-        SetupInfoBar.Title = "Setup";
+        BackendStatus snapshot = await App.Services.BackendSupervisor.RefreshHealthAsync(cancellationToken);
+        await UpdateBackendSnapshotAsync(snapshot);
+        return snapshot;
+    }
+
+    private Task UpdateBackendSnapshotAsync(BackendStatus snapshot)
+        => RunOnDispatcherAsync(() => UpdateBackendSnapshot(snapshot));
+
+    private Task UpdateSetupStatusAsync(SetupStatusResponse setup)
+        => RunOnDispatcherAsync(() => UpdateSetupStatus(setup));
+
+    private Task UpdateTasksAsync(IEnumerable<SetupTaskDto> tasks)
+    {
+        var snapshot = tasks.ToArray();
+        return RunOnDispatcherAsync(() => UpdateTasks(snapshot));
+    }
+
+    private Task SetRefreshStateAsync(bool refreshing)
+        => RunOnDispatcherAsync(() =>
+        {
+            RefreshButton.IsEnabled = !refreshing;
+            SetupProgress.IsActive = refreshing;
+            if (refreshing)
+            {
+                SetupInfoBar.IsOpen = false;
+                BackendReadinessText.Text = "Backend: checking...";
+            }
+        });
+
+    private Task SetActionsEnabledAsync(bool enabled)
+        => RunOnDispatcherAsync(() => StudioPageHelpers.SetControlsEnabled(ActionsCard, enabled));
+
+    private Task ClearStatusAsync() => RunOnDispatcherAsync(() => SetupInfoBar.IsOpen = false);
+
+    private Task ClearTokenBoxAsync() => RunOnDispatcherAsync(() => BackendTokenBox.Password = string.Empty);
+
+    private async Task PresentFailureAsync(Exception exception, CancellationToken cancellationToken, string defaultTitle)
+    {
+        if (TryCreateAuthenticationPresentation(exception, out var authentication))
+        {
+            await ShowStatusAsync(authentication.Severity, authentication.Title, authentication.Message);
+            return;
+        }
+
+        BackendStatus? snapshot = null;
+        if (exception is StudioApiException || IsTransportFailure(exception))
+        {
+            snapshot = await RefreshBackendSnapshotAsync(cancellationToken);
+            if (!snapshot.IsReady)
+            {
+                await ShowBackendHealthAsync(snapshot);
+                return;
+            }
+        }
+
+        if (IsTransportFailure(exception))
+        {
+            await ShowStatusAsync(
+                InfoBarSeverity.Warning,
+                "Connection failed",
+                $"{StudioPageHelpers.GetErrorMessage(exception)} Check that {(snapshot ?? App.Services.BackendSupervisor.Status).CurrentBackendUri} is reachable.");
+            return;
+        }
+
+        await ShowStatusAsync(InfoBarSeverity.Error, defaultTitle, StudioPageHelpers.GetErrorMessage(exception));
+    }
+
+    private Task ShowBackendHealthAsync(BackendStatus snapshot)
+    {
+        var title = snapshot.State switch
+        {
+            BackendLifecycleState.Resolving or
+            BackendLifecycleState.CheckingExisting or
+            BackendLifecycleState.Starting or
+            BackendLifecycleState.WaitingForHealth => "Backend starting",
+            BackendLifecycleState.Failed => "Backend failed",
+            _ => "Backend unavailable"
+        };
+        var severity = snapshot.State switch
+        {
+            BackendLifecycleState.Resolving or
+            BackendLifecycleState.CheckingExisting or
+            BackendLifecycleState.Starting or
+            BackendLifecycleState.WaitingForHealth => InfoBarSeverity.Informational,
+            BackendLifecycleState.Failed => InfoBarSeverity.Error,
+            _ => InfoBarSeverity.Warning
+        };
+        return ShowStatusAsync(severity, title, snapshot.Detail ?? snapshot.Message);
+    }
+
+    private Task ShowCancellationAsync(string operationName, CancellationToken cancellationToken)
+    {
+        if (!cancellationToken.IsCancellationRequested || _lifetimeCts?.IsCancellationRequested == true)
+        {
+            return Task.CompletedTask;
+        }
+
+        return ShowStatusAsync(InfoBarSeverity.Informational, "Canceled", $"{operationName} was canceled.");
+    }
+
+    private Task ShowSuccessAsync(string message)
+        => ShowStatusAsync(InfoBarSeverity.Success, "Setup", message);
+
+    private Task ShowErrorAsync(string message)
+        => ShowStatusAsync(InfoBarSeverity.Error, "Setup failed", message);
+
+    private Task ShowStatusAsync(InfoBarSeverity severity, string title, string message)
+        => RunOnDispatcherAsync(() => ApplyStatus(severity, title, message));
+
+    private void ShowSuccess(string message) => ShowStatus(InfoBarSeverity.Success, "Setup", message);
+
+    private void ShowError(string message) => ShowStatus(InfoBarSeverity.Error, "Setup failed", message);
+
+    private void ShowStatus(InfoBarSeverity severity, string title, string message)
+    {
+        if (DispatcherQueue.HasThreadAccess)
+        {
+            ApplyStatus(severity, title, message);
+            return;
+        }
+
+        _ = DispatcherQueue.TryEnqueue(() => ApplyStatus(severity, title, message));
+    }
+
+    private void ApplyStatus(InfoBarSeverity severity, string title, string message)
+    {
+        SetupInfoBar.Severity = severity;
+        SetupInfoBar.Title = title;
         SetupInfoBar.Message = message;
         SetupInfoBar.IsOpen = true;
     }
 
-    private void ShowError(string message)
+    private static bool TryCreateAuthenticationPresentation(
+        Exception exception,
+        out SetupStatusPresentation presentation)
     {
-        SetupInfoBar.Severity = InfoBarSeverity.Error;
-        SetupInfoBar.Title = "Setup failed";
-        SetupInfoBar.Message = message;
-        SetupInfoBar.IsOpen = true;
+        if (exception is StudioApiException apiException
+            && (apiException.AuthenticationChallenge
+                || apiException.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden))
+        {
+            presentation = new SetupStatusPresentation(
+                InfoBarSeverity.Warning,
+                "Authentication required",
+                string.IsNullOrWhiteSpace(apiException.Hint)
+                    ? $"{apiException.Message} Save a backend token on this page if the backend requires one."
+                    : apiException.UserFacingMessage);
+            return true;
+        }
+
+        presentation = default;
+        return false;
     }
+
+    private static bool IsTransportFailure(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is HttpRequestException or IOException or SocketException)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private Task RunOnDispatcherAsync(Action action)
+    {
+        if (DispatcherQueue.HasThreadAccess)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!DispatcherQueue.TryEnqueue(() =>
+            {
+                try
+                {
+                    action();
+                    completion.SetResult();
+                }
+                catch (Exception exception)
+                {
+                    completion.SetException(exception);
+                }
+            }))
+        {
+            completion.SetResult();
+        }
+
+        return completion.Task;
+    }
+
+    private readonly record struct SetupStatusPresentation(
+        InfoBarSeverity Severity,
+        string Title,
+        string Message);
 }
 
 public sealed class SetupTaskView

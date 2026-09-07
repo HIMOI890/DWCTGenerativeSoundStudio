@@ -1,0 +1,4 @@
+# Pinned Hugging Face download helpers used by setup_linux_comfyui.sh when COMFY_INSTALL_MODELS=1.
+hf-transfer==0.1.9
+hf-xet==1.5.1
+huggingface-hub==0.36.2

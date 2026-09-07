@@ -1,0 +1,6 @@
+# Direct ComfyUI-Stable-Video-Diffusion packages not already supplied by the EDMG locked backend profile.
+# Source: ComfyUI-Stable-Video-Diffusion requirements.txt/install.py at commit 2b2891c8046ade10d32f59d0178a500fd925de4c.
+ftfy==6.3.1
+open-clip-torch==3.3.0
+timm==1.0.29
+xformers==0.0.22.post4 ; python_version < "3.12"

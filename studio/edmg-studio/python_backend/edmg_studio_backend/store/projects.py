@@ -6,8 +6,10 @@ import logging
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,8 +17,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 _CORRUPTED_QUARANTINE_SUFFIX = ".__corrupted_quarantine"
+_PROJECT_LOCK_FILENAME = ".project.lock"
+_PROJECT_LOCK_POLL_S = 0.01
+_PROJECT_LOCK_TIMEOUT_S = 15.0
+_PROJECT_LOCK_STALE_S = 120.0
 
 
 @dataclass
@@ -24,6 +30,8 @@ class Project:
     id: str
     name: str
     created_at: str
+    updated_at: str
+    revision: int
     meta: dict[str, Any]
     schema_version: int = CURRENT_SCHEMA_VERSION
 
@@ -40,10 +48,40 @@ def _migrate_v0_to_v1(data: dict[str, Any]) -> dict[str, Any]:
     return next_data
 
 
+def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
+    """Add durable revision metadata to older project documents."""
+    next_data = dict(data)
+    created_at = str(next_data.get("created_at") or "").strip() or time.strftime("%Y-%m-%d %H:%M:%S")
+    next_data["updated_at"] = str(next_data.get("updated_at") or "").strip() or created_at
+    revision_raw = next_data.get("revision")
+    if revision_raw is None:
+        meta = next_data.get("meta")
+        if isinstance(meta, dict):
+            revision_raw = meta.get("revision")
+    try:
+        revision = max(1, int(revision_raw or 1))
+    except (TypeError, ValueError):
+        revision = 1
+    next_data["revision"] = revision
+    next_data["schema_version"] = 2
+    return next_data
+
+
 # Target version -> migration from previous version.
 PROJECT_MIGRATIONS: dict[int, MigrationFn] = {
     1: _migrate_v0_to_v1,
+    2: _migrate_v1_to_v2,
 }
+
+
+class StaleProjectRevisionError(RuntimeError):
+    def __init__(self, project_id: str, expected_revision: int, actual_revision: int):
+        self.project_id = project_id
+        self.expected_revision = int(expected_revision)
+        self.actual_revision = int(actual_revision)
+        super().__init__(
+            f"Project revision mismatch for {project_id}: expected {expected_revision}, current {actual_revision}"
+        )
 
 
 def validate_project_document(data: dict[str, Any]) -> dict[str, Any]:
@@ -63,6 +101,14 @@ def validate_project_document(data: dict[str, Any]) -> dict[str, Any]:
         meta = {}
     if not isinstance(meta, dict):
         raise ValueError("Project meta must be an object")
+    updated_at = str(data.get("updated_at") or "").strip() or created_at
+    revision_raw = data.get("revision")
+    if revision_raw is None:
+        revision_raw = meta.get("revision")
+    try:
+        revision = max(1, int(revision_raw or 1))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Project revision must be an integer >= 1") from exc
     schema_version = int(data.get("schema_version") or 0)
     if schema_version < 0:
         raise ValueError("schema_version must be >= 0")
@@ -75,6 +121,8 @@ def validate_project_document(data: dict[str, Any]) -> dict[str, Any]:
         "id": project_id,
         "name": name,
         "created_at": created_at,
+        "updated_at": updated_at,
+        "revision": revision,
         "meta": meta,
         "schema_version": schema_version,
     }
@@ -107,6 +155,8 @@ class ProjectStore:
         self.base_dir = base_dir
         self.projects_dir = self.base_dir / "projects"
         self.projects_dir.mkdir(parents=True, exist_ok=True)
+        self._locks_guard = threading.Lock()
+        self._project_locks: dict[str, threading.RLock] = {}
 
     def _proj_dir(self, project_id: str) -> Path:
         d = self._resolve_project_dir(project_id)
@@ -147,6 +197,78 @@ class ProjectStore:
         shutil.copy2(project_path, backup)
         return backup
 
+    def _now(self) -> str:
+        return time.strftime("%Y-%m-%d %H:%M:%S")
+
+    def _project_lock(self, project_id: str) -> threading.RLock:
+        safe_project_id = self._validate_project_id(project_id)
+        with self._locks_guard:
+            lock = self._project_locks.get(safe_project_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._project_locks[safe_project_id] = lock
+            return lock
+
+    def _lock_path(self, project_id: str) -> Path:
+        project_dir = self._resolve_project_dir(project_id)
+        project_dir.mkdir(parents=True, exist_ok=True)
+        return project_dir / _PROJECT_LOCK_FILENAME
+
+    def _try_break_stale_lock(self, lock_path: Path) -> bool:
+        try:
+            stat = lock_path.stat()
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return False
+        if time.time() - float(stat.st_mtime) < _PROJECT_LOCK_STALE_S:
+            return False
+        try:
+            lock_path.unlink()
+            logger.warning("Removed stale project lock: %s", lock_path)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+
+    def _acquire_lock_file(self, project_id: str) -> tuple[Path, int]:
+        lock_path = self._lock_path(project_id)
+        deadline = time.monotonic() + _PROJECT_LOCK_TIMEOUT_S
+        while True:
+            try:
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                payload = f"{os.getpid()} {time.time()}\n".encode("utf-8")
+                os.write(fd, payload)
+                try:
+                    os.fsync(fd)
+                except OSError:
+                    pass
+                return lock_path, fd
+            except FileExistsError:
+                if self._try_break_stale_lock(lock_path):
+                    continue
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for project lock {lock_path}")
+                time.sleep(_PROJECT_LOCK_POLL_S)
+
+    @contextmanager
+    def _synchronized_project(self, project_id: str):
+        lock = self._project_lock(project_id)
+        with lock:
+            lock_path, fd = self._acquire_lock_file(project_id)
+            try:
+                yield
+            finally:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                try:
+                    lock_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("Cannot remove project lock %s: %s", lock_path, exc)
+
     def _write_atomic(self, project_path: Path, payload: dict[str, Any]) -> None:
         project_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = project_path.with_name(f"{project_path.name}.{uuid.uuid4().hex}.tmp")
@@ -182,12 +304,15 @@ class ProjectStore:
             id=validated["id"],
             name=validated["name"],
             created_at=validated["created_at"],
+            updated_at=validated["updated_at"],
+            revision=int(validated["revision"]),
             meta=dict(validated["meta"]),
             schema_version=int(validated["schema_version"]),
         )
 
     def _load_document(self, project_id: str, *, persist_migrations: bool = True) -> dict[str, Any] | None:
-        project_path = self._project_path(project_id)
+        safe_project_id = self._validate_project_id(project_id)
+        project_path = self._project_path(safe_project_id)
         try:
             if not project_path.exists():
                 return None
@@ -198,8 +323,16 @@ class ProjectStore:
         from_version = int((raw or {}).get("schema_version") or 0)
         migrated, changed, _applied = migrate_project_document(raw)
         if changed and persist_migrations:
-            self._backup_before_migration(project_path, from_version)
-            self._write_atomic(project_path, migrated)
+            with self._synchronized_project(safe_project_id):
+                if not project_path.exists():
+                    return migrated
+                current_on_disk = json.loads(project_path.read_text(encoding="utf-8"))
+                current_from_version = int((current_on_disk or {}).get("schema_version") or 0)
+                current_migrated, current_changed, _ = migrate_project_document(current_on_disk)
+                if current_changed:
+                    self._backup_before_migration(project_path, current_from_version)
+                    self._write_atomic(project_path, current_migrated)
+                migrated = current_migrated
         return migrated
 
     def list(self) -> list[Project]:
@@ -228,11 +361,13 @@ class ProjectStore:
 
     def create(self, name: str) -> Project:
         pid = uuid.uuid4().hex
-        created_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        created_at = self._now()
         proj = Project(
             id=pid,
             name=name,
             created_at=created_at,
+            updated_at=created_at,
+            revision=1,
             meta={},
             schema_version=CURRENT_SCHEMA_VERSION,
         )
@@ -249,42 +384,117 @@ class ProjectStore:
             return None
         return self._to_project(data)
 
-    def save(self, proj: Project) -> None:
-        d = self._proj_dir(proj.id)
-        target = d / "project.json"
-        schema_version = int(getattr(proj, "schema_version", CURRENT_SCHEMA_VERSION) or CURRENT_SCHEMA_VERSION)
-        if schema_version != CURRENT_SCHEMA_VERSION:
-            migrated, _, _ = migrate_project_document(
-                {
-                    "id": proj.id,
-                    "name": proj.name,
-                    "created_at": proj.created_at,
-                    "meta": proj.meta,
-                    "schema_version": schema_version,
-                }
+    def _payload_for_project(
+        self,
+        proj: Project,
+        *,
+        created_at: str,
+        updated_at: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        payload = {
+            "id": proj.id,
+            "name": proj.name,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "revision": revision,
+            "meta": dict(proj.meta or {}),
+            "schema_version": CURRENT_SCHEMA_VERSION,
+        }
+        validated = validate_project_document(payload)
+        return {
+            "id": validated["id"],
+            "name": validated["name"],
+            "created_at": validated["created_at"],
+            "updated_at": validated["updated_at"],
+            "revision": int(validated["revision"]),
+            "meta": dict(validated["meta"]),
+            "schema_version": CURRENT_SCHEMA_VERSION,
+        }
+
+    def save(self, proj: Project, *, expected_revision: int | None = None) -> None:
+        safe_project_id = self._validate_project_id(proj.id)
+        with self._synchronized_project(safe_project_id):
+            current = self._load_document(safe_project_id, persist_migrations=False)
+            target = self._project_path(safe_project_id)
+            if current is None:
+                created_at = str(getattr(proj, "created_at", "") or "").strip() or self._now()
+                next_revision = max(1, int(getattr(proj, "revision", 1) or 1))
+            else:
+                actual_revision = int(current.get("revision") or 1)
+                effective_expected = expected_revision
+                if effective_expected is None:
+                    try:
+                        effective_expected = int(getattr(proj, "revision", 0) or 0)
+                    except (TypeError, ValueError):
+                        effective_expected = 0
+                if effective_expected and effective_expected != actual_revision:
+                    raise StaleProjectRevisionError(
+                        safe_project_id,
+                        int(effective_expected),
+                        actual_revision,
+                    )
+                created_at = str(current.get("created_at") or getattr(proj, "created_at", "") or self._now())
+                next_revision = actual_revision + 1
+            updated_at = self._now()
+            payload = self._payload_for_project(
+                proj,
+                created_at=created_at,
+                updated_at=updated_at,
+                revision=next_revision,
             )
-            payload = migrated
+            self._write_atomic(target, payload)
+            proj.created_at = created_at
+            proj.updated_at = updated_at
+            proj.revision = next_revision
+            proj.meta = dict(payload["meta"])
             proj.schema_version = CURRENT_SCHEMA_VERSION
-            proj.meta = dict(migrated["meta"])
-        else:
-            payload = {
-                "id": proj.id,
-                "name": proj.name,
-                "created_at": proj.created_at,
-                "meta": proj.meta,
-                "schema_version": CURRENT_SCHEMA_VERSION,
-            }
-        validate_project_document(payload)
-        self._write_atomic(target, payload)
+
+    def mutate(
+        self,
+        project_id: str,
+        mutator: Callable[[Project], None],
+        *,
+        expected_revision: int | None = None,
+    ) -> Project:
+        safe_project_id = self._validate_project_id(project_id)
+        with self._synchronized_project(safe_project_id):
+            current = self._load_document(safe_project_id, persist_migrations=False)
+            if current is None:
+                raise KeyError("Project not found")
+            actual_revision = int(current.get("revision") or 1)
+            if expected_revision is not None and int(expected_revision) != actual_revision:
+                raise StaleProjectRevisionError(
+                    safe_project_id,
+                    int(expected_revision),
+                    actual_revision,
+                )
+            proj = self._to_project(current)
+            mutator(proj)
+            updated_at = self._now()
+            payload = self._payload_for_project(
+                proj,
+                created_at=proj.created_at,
+                updated_at=updated_at,
+                revision=actual_revision + 1,
+            )
+            self._write_atomic(self._project_path(safe_project_id), payload)
+            proj.updated_at = updated_at
+            proj.revision = actual_revision + 1
+            proj.meta = dict(payload["meta"])
+            proj.schema_version = CURRENT_SCHEMA_VERSION
+            return proj
 
     def project_dir(self, project_id: str) -> Path:
         return self._proj_dir(project_id)
 
     def set_audio(self, project_id: str, filename: str, bytes_len: int) -> None:
-        proj = self.get(project_id)
-        if not proj:
-            raise KeyError("Project not found")
-        proj.meta["audio"] = {"filename": filename, "size_bytes": bytes_len}
-        proj.meta.pop("analysis", None)
-        proj.meta.pop("last_plan", None)
-        self.save(proj)
+        def _apply(proj: Project) -> None:
+            proj.meta["audio"] = {"filename": filename, "size_bytes": bytes_len}
+            proj.meta.pop("analysis", None)
+            proj.meta.pop("last_plan", None)
+
+        try:
+            self.mutate(project_id, _apply)
+        except KeyError as exc:
+            raise KeyError("Project not found") from exc

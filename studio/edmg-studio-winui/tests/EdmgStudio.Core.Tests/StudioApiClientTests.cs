@@ -108,6 +108,181 @@ public sealed class StudioApiClientTests
     }
 
     [TestMethod]
+    public async Task StableProjectRevisionConflict_BecomesTypedExceptionWithMetadata()
+    {
+        using var httpClient = new HttpClient(new RecordingHandler((_, _) => Task.FromResult(
+            JsonResponse(
+                """
+                {
+                  "error": {
+                    "code": "project_revision_conflict",
+                    "message": "The project changed.",
+                    "hint": "Reload before retrying.",
+                    "project_id": "project-7",
+                    "details": {
+                      "expected_revision": "12",
+                      "current_revision": 14
+                    }
+                  }
+                }
+                """,
+                HttpStatusCode.Conflict))));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+
+        var exception = await Assert.ThrowsExactlyAsync<ProjectRevisionConflictException>(
+            () => client.GetProjectsAsync());
+
+        Assert.AreEqual(HttpStatusCode.Conflict, exception.StatusCode);
+        Assert.AreEqual(ProjectRevisionConflictException.ErrorCode, exception.Code);
+        Assert.AreEqual("project-7", exception.ProjectId);
+        Assert.AreEqual(12L, exception.ExpectedRevision);
+        Assert.AreEqual(14L, exception.ActualRevision);
+        Assert.AreEqual("The project changed. Reload before retrying.", exception.UserFacingMessage);
+    }
+
+    [TestMethod]
+    public async Task UnrelatedConflict_RemainsExactlyStudioApiException()
+    {
+        using var httpClient = new HttpClient(new RecordingHandler((_, _) => Task.FromResult(
+            JsonResponse(
+                """{"error":{"code":"PROJECT_NAME_CONFLICT","message":"That name is already used.","hint":"Choose another name."}}""",
+                HttpStatusCode.Conflict))));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider(null),
+            httpClient);
+
+        var exception = await Assert.ThrowsExactlyAsync<StudioApiException>(
+            () => client.GetProjectsAsync());
+
+        Assert.AreEqual(HttpStatusCode.Conflict, exception.StatusCode);
+        Assert.AreEqual("PROJECT_NAME_CONFLICT", exception.Code);
+    }
+
+    [TestMethod]
+    public async Task RevisionAwareMutations_SerializeExpectedRevisionAndLegacyCallsOmitIt()
+    {
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null
+                    ? string.Empty
+                    : await request.Content.ReadAsStringAsync(cancellationToken)));
+
+            return request.RequestUri!.AbsolutePath switch
+            {
+                var path when path.EndsWith("/plan", StringComparison.Ordinal) =>
+                    JsonResponse("""{"source":"local","duration_s":30,"variants":[]}"""),
+                var path when path.EndsWith("/template_package/import", StringComparison.Ordinal) =>
+                    JsonResponse("""{"ok":true,"applied":[]}"""),
+                var path when path.EndsWith("/timeline/apply_plan", StringComparison.Ordinal) =>
+                    JsonResponse("""{"ok":true,"timeline":{},"variant_index":0}"""),
+                var path when path.EndsWith("/plan/variant", StringComparison.Ordinal) =>
+                    JsonResponse("""{"ok":true,"variant_index":0}"""),
+                var path when path.EndsWith("/planner_lab/import", StringComparison.Ordinal) =>
+                    JsonResponse(
+                        """{"ok":true,"plan":{"source":"planner_lab","variants":[]},"timeline":{},"visual_dna":{},"visual_dna_hints":{}}"""),
+                var path when path.EndsWith("/reactive_lab/apply", StringComparison.Ordinal) =>
+                    JsonResponse("""{"ok":true,"timeline":{},"visual_dna":{},"visual_dna_hints":{}}"""),
+                var path when path.EndsWith("/motion_grammar/apply", StringComparison.Ordinal) =>
+                    JsonResponse("""{"ok":true,"timeline":{}}"""),
+                _ => JsonResponse("""{"ok":true}"""),
+            };
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("revision-token"),
+            httpClient);
+        using var objectDocument = JsonDocument.Parse("""{"value":1}""");
+        JsonElement payload = objectDocument.RootElement.Clone();
+
+        await client.GeneratePlanAsync(
+            "revisioned",
+            new PlanRequest("Project", "brief", "style", 1, 8, ExpectedRevision: 11),
+            "local");
+        await client.ImportProjectTemplatePackageAsync(
+            "revisioned",
+            new TemplatePackageDto { SchemaVersion = 1, Payload = payload },
+            merge: true,
+            expectedRevision: 12);
+        await client.ApplyPlanToTimelineAsync(
+            "revisioned",
+            variantIndex: 0,
+            overwrite: true,
+            expectedRevision: 13);
+        await client.UpdatePlanVariantAsync(
+            "revisioned",
+            variantIndex: 0,
+            scenes: [],
+            expectedRevision: 14);
+        await client.ImportPlannerLabAsync(
+            "revisioned",
+            new PlannerLabImportRequest
+            {
+                Analysis = payload,
+                Plan = payload,
+                Settings = new PlannerLabSettings(),
+                ExpectedRevision = 15,
+            });
+        await client.ApplyReactiveLabAsync(
+            "revisioned",
+            new ReactiveLabApplyRequest
+            {
+                Schedules = payload,
+                ExpectedRevision = 16,
+            });
+        await client.SaveTimelineAsync("revisioned", payload, expectedRevision: 17);
+        await client.AutosaveTimelineAsync(
+            "revisioned",
+            payload,
+            payload,
+            "interval",
+            expectedRevision: 18);
+        await client.ApplyMotionGrammarAsync(
+            "revisioned",
+            [new MotionPhraseRequest("settle", 0, 2)],
+            overwriteMotionTrack: false,
+            expectedRevision: 19);
+        await client.ApplyRecoveryAsync(
+            "revisioned",
+            new RecoveryApplyRequest(ExpectedRevision: 20));
+        await client.SaveTimelineAsync("legacy", payload);
+
+        AssertExpectedRevision("/v1/projects/revisioned/plan", 11);
+        AssertExpectedRevision("/v1/projects/revisioned/template_package/import", 12);
+        AssertExpectedRevision("/v1/projects/revisioned/timeline/apply_plan", 13);
+        AssertExpectedRevision("/v1/projects/revisioned/plan/variant", 14);
+        AssertExpectedRevision("/v1/projects/revisioned/planner_lab/import", 15);
+        AssertExpectedRevision("/v1/projects/revisioned/reactive_lab/apply", 16);
+        AssertExpectedRevision("/v1/projects/revisioned/timeline", 17);
+        AssertExpectedRevision("/v1/projects/revisioned/autosave", 18);
+        AssertExpectedRevision("/v1/projects/revisioned/motion_grammar/apply", 19);
+        AssertExpectedRevision("/v1/projects/revisioned/recovery/apply", 20);
+
+        using var legacyPayload = JsonDocument.Parse(
+            captured.Single(item => item.Uri.AbsolutePath == "/v1/projects/legacy/timeline").Body);
+        Assert.IsFalse(legacyPayload.RootElement.TryGetProperty("expected_revision", out _));
+
+        void AssertExpectedRevision(string path, long expectedRevision)
+        {
+            using var document = JsonDocument.Parse(
+                captured.Single(item => item.Uri.AbsolutePath == path).Body);
+            Assert.AreEqual(
+                expectedRevision,
+                document.RootElement.GetProperty("expected_revision").GetInt64(),
+                path);
+        }
+    }
+
+    [TestMethod]
     public async Task PlannerReactiveTypedMethods_UseExactContractsAndDeserializeReadiness()
     {
         var captured = new List<CapturedRequest>();
@@ -675,6 +850,168 @@ public sealed class StudioApiClientTests
         await Assert.ThrowsAsync<OperationCanceledException>(async () => await streaming);
         Assert.IsTrue(content.IsDisposed);
         Assert.IsTrue(content.Stream.IsDisposed);
+    }
+
+    [TestMethod]
+    public async Task GetProjectMediaUrlsAsync_UsesAuthenticatedSignedMediaContract()
+    {
+        CapturedRequest? captured = null;
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured = new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken));
+            return JsonResponse(
+                """
+                {
+                  "expires_at": 1760000000,
+                  "urls": [
+                    {
+                      "purpose": "preview",
+                      "url": "/signed/preview/frame?t=1.25&sig=test"
+                    }
+                  ]
+                }
+                """);
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("signed-token"),
+            httpClient);
+
+        SignedMediaUrlBatchResponse response = await client.GetProjectMediaUrlsAsync(
+            "project /#1",
+            [
+                new SignedMediaUrlRequest
+                {
+                    Purpose = "preview",
+                    Query = JsonSerializer.SerializeToElement(new { t = 1.25, variant_index = 2 })
+                }
+            ]);
+
+        Assert.AreEqual(1760000000L, response.ExpiresAtUnixSeconds);
+        Assert.AreEqual("/signed/preview/frame?t=1.25&sig=test", response.Urls.Single().Url);
+        Assert.IsNotNull(captured);
+        Assert.AreEqual(HttpMethod.Post, captured.Method);
+        Assert.AreEqual("/v1/projects/project%20%2F%231/media-urls", captured.Uri.AbsolutePath);
+        Assert.AreEqual("Bearer " + "signed" + "-token", captured.Authorization);
+        Assert.AreEqual("application/json", captured.ContentType);
+        using var payload = JsonDocument.Parse(captured.Body);
+        JsonElement request = payload.RootElement.GetProperty("requests")[0];
+        Assert.AreEqual("preview", request.GetProperty("purpose").GetString());
+        Assert.AreEqual(1.25, request.GetProperty("query").GetProperty("t").GetDouble());
+        Assert.AreEqual(2, request.GetProperty("query").GetProperty("variant_index").GetInt32());
+        Assert.IsFalse(request.TryGetProperty("path", out _));
+    }
+
+    [TestMethod]
+    public async Task StreamProjectPreviewFileAsync_UsesSignedMediaUrlWithoutBearerOnDownload()
+    {
+        byte[] expected = [0xAA, 0xBB, 0xCC];
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+
+            return (request.Method.Method, request.RequestUri!.AbsolutePath) switch
+            {
+                ("POST", "/v1/projects/p1/media-urls") => JsonResponse(
+                    """
+                    {
+                      "expires_at": 1760000000,
+                      "urls": [
+                        {
+                          "purpose": "file",
+                          "url": "/signed/media?sig=preview"
+                        }
+                      ]
+                    }
+                    """),
+                ("GET", "/signed/media") => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(expected)
+                },
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+            };
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("preview-token"),
+            httpClient);
+
+        byte[] actual = await client.StreamProjectPreviewFileAsync(
+            "p1",
+            "renders/preview.png",
+            async (file, cancellationToken) =>
+            {
+                using var copy = new MemoryStream();
+                await file.Stream.CopyToAsync(copy, cancellationToken);
+                return copy.ToArray();
+            });
+
+        CollectionAssert.AreEqual(expected, actual);
+        Assert.AreEqual(2, captured.Count);
+        Assert.AreEqual("/v1/projects/p1/media-urls", captured[0].Uri.AbsolutePath);
+        Assert.AreEqual("Bearer " + "preview" + "-token", captured[0].Authorization);
+        Assert.AreEqual("/signed/media", captured[1].Uri.AbsolutePath);
+        Assert.IsNull(captured[1].Authorization);
+    }
+
+    [TestMethod]
+    public async Task StreamProjectPreviewFileAsync_FallsBackToLegacyFileRouteWhenSignedMediaIsUnavailable()
+    {
+        byte[] expected = [0xAA, 0xBB, 0xCC];
+        var captured = new List<CapturedRequest>();
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
+        {
+            captured.Add(new CapturedRequest(
+                request.Method,
+                request.RequestUri!,
+                request.Headers.Authorization?.ToString(),
+                request.Content?.Headers.ContentType?.MediaType,
+                request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken)));
+
+            return (request.Method.Method, request.RequestUri!.AbsolutePath) switch
+            {
+                ("POST", "/v1/projects/p1/media-urls") => JsonResponse(
+                    """{"error":{"code":"NOT_FOUND","message":"missing"}}""",
+                    HttpStatusCode.NotFound),
+                ("GET", "/v1/projects/p1/file") => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(expected)
+                },
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound)
+            };
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("preview-token"),
+            httpClient);
+
+        byte[] actual = await client.StreamProjectPreviewFileAsync(
+            "p1",
+            "renders/preview.png",
+            async (file, cancellationToken) =>
+            {
+                using var copy = new MemoryStream();
+                await file.Stream.CopyToAsync(copy, cancellationToken);
+                return copy.ToArray();
+            });
+
+        CollectionAssert.AreEqual(expected, actual);
+        Assert.AreEqual(2, captured.Count);
+        Assert.AreEqual("/v1/projects/p1/media-urls", captured[0].Uri.AbsolutePath);
+        Assert.AreEqual("/v1/projects/p1/file", captured[1].Uri.AbsolutePath);
+        Assert.AreEqual("?path=renders%2Fpreview.png", captured[1].Uri.Query);
+        Assert.AreEqual("Bearer " + "preview" + "-token", captured[1].Authorization);
     }
 
     [TestMethod]

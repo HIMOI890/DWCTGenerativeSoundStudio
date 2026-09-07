@@ -14,6 +14,7 @@ namespace EdmgStudio.WinUI.Pages;
 public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 {
     private readonly StudioApiClient _apiClient = App.Services.ApiClient;
+    private readonly StudioProjectMediaClient _projectMediaClient = App.Services.ProjectMediaClient;
     private readonly List<string> _selectedPaths = [];
     private CancellationTokenSource? _pageCancellation;
     private CancellationTokenSource? _previewCancellation;
@@ -419,7 +420,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 
         try
         {
-            await _apiClient.StreamProjectFileAsync(
+            await _projectMediaClient.StreamProjectMediaAsync(
                 projectId,
                 artifact.Path,
                 async (file, callbackToken) =>
@@ -432,7 +433,7 @@ public sealed partial class ReviewPage : Page, INotifyPropertyChanged
 
                     if (artifact.IsVideo)
                     {
-                        await ArtifactPreview.LoadVideoStreamAsync(file.Stream, callbackToken);
+                        await ArtifactPreview.LoadVideoStreamAsync(file.Stream, file.ContentHeaders.ContentLength, callbackToken);
                     }
                     else
                     {

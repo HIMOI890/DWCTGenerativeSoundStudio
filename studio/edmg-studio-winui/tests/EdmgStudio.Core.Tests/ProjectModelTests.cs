@@ -7,6 +7,27 @@ namespace EdmgStudio.Core.Tests;
 public sealed class ProjectModelTests
 {
     [TestMethod]
+    public void ProjectRevisionMetadata_DeserializesFromCanonicalFields()
+    {
+        var project = JsonSerializer.Deserialize<ProjectDto>(
+            """
+            {
+              "id": "p-revision",
+              "name": "Revisioned Project",
+              "created_at": "2026-08-12T08:00:00Z",
+              "updated_at": "2026-08-12T09:30:00Z",
+              "revision": 17,
+              "schema_version": 1,
+              "meta": {}
+            }
+            """,
+            StudioJson.Options)!;
+
+        Assert.AreEqual(17L, project.Revision);
+        Assert.AreEqual("2026-08-12T09:30:00Z", project.UpdatedAt);
+    }
+
+    [TestMethod]
     public void PersistedProjectMetadata_DrivesNativeWorkflowState()
     {
         var project = JsonSerializer.Deserialize<ProjectDto>(

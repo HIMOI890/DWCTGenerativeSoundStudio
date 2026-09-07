@@ -1,0 +1,5 @@
+# Direct ComfyUI-Manager packages not already supplied by the EDMG locked backend profile.
+# Source: ComfyUI-Manager requirements.txt at commit f82970b7cb63ad44928308f980a1d38fda103cbb.
+chardet==7.6.0
+matrix-nio==0.26.0
+PyGithub==2.10.0

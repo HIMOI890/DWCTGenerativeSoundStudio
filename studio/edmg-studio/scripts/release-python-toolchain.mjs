@@ -18,6 +18,19 @@ export const REQUIRED_LINUX_SETUP_SCRIPTS = Object.freeze([
   "scripts/setup_linux_ollama.sh",
   "scripts/setup_linux_comfyui.sh",
 ]);
+export const REQUIRED_LINUX_SETUP_METADATA = Object.freeze([
+  "scripts/linux-sidecar-pins/ollama-release.env",
+  "scripts/linux-sidecar-pins/comfyui-sources.env",
+  "scripts/linux-sidecar-pins/comfyui-model-assets.env",
+  "scripts/linux-sidecar-pins/comfyui-core-requirements.txt",
+  "scripts/linux-sidecar-pins/comfyui-manager-requirements.txt",
+  "scripts/linux-sidecar-pins/comfyui-stable-video-diffusion-requirements.txt",
+  "scripts/linux-sidecar-pins/huggingface-download-runtime-requirements.txt",
+]);
+export const REQUIRED_LINUX_SETUP_FILES = Object.freeze([
+  ...REQUIRED_LINUX_SETUP_SCRIPTS,
+  ...REQUIRED_LINUX_SETUP_METADATA,
+]);
 export const REQUIRED_FASTER_WHISPER_VAD_ASSET =
   "_internal/faster_whisper/assets/silero_vad_v6.onnx";
 
@@ -429,7 +442,7 @@ export function validateReleaseManifest(
       errors.push(`${REQUIRED_FASTER_WHISPER_VAD_ASSET} is missing or empty in the backend bundle`);
     }
     if (releasePlatform === "linux") {
-      for (const entryPoint of REQUIRED_LINUX_SETUP_SCRIPTS) {
+      for (const entryPoint of REQUIRED_LINUX_SETUP_FILES) {
         const entry = bundleEntries.find(
           (candidate) => candidate?.path === entryPoint && candidate?.type === "file",
         );
@@ -494,7 +507,7 @@ export function validateReleaseManifest(
       "python_backend/hf_bucket_helper/pyproject.toml",
       "python_backend/hf_bucket_helper/uv.lock",
       "launcher_env.defaults.json",
-      ...(releasePlatform === "linux" ? REQUIRED_LINUX_SETUP_SCRIPTS : []),
+      ...(releasePlatform === "linux" ? REQUIRED_LINUX_SETUP_FILES : []),
     ];
     for (const suffix of requiredSuffixes) {
       const entry = manifest.fingerprintInputs.find((candidate) => String(candidate?.path ?? "").replaceAll("\\", "/").endsWith(suffix));

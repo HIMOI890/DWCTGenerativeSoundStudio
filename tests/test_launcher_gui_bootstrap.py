@@ -273,3 +273,80 @@ def test_sync_locked_backend_uses_one_fixed_profile_and_capability_set(monkeypat
     verification_command = " ".join(calls["run"][1])
     assert "hf_transfer" in verification_command
     assert "hf_xet" in verification_command
+
+
+def test_call_on_ui_thread_skips_callbacks_after_disposal() -> None:
+    launcher_gui = _load_launcher_gui()
+    invoked: list[str] = []
+    scheduled: list[object] = []
+
+    class DummyRoot:
+        def __init__(self) -> None:
+            self._disposed = False
+
+        def _on_ui_thread(self) -> bool:
+            return False
+
+        def _ui_alive(self) -> bool:
+            return not self._disposed
+
+        def after(self, _delay: int, callback) -> str:
+            scheduled.append(callback)
+            return "after-token"
+
+    root = DummyRoot()
+    root._invoke_ui_callback = launcher_gui.Launcher._invoke_ui_callback.__get__(root, DummyRoot)
+
+    assert launcher_gui.Launcher._call_on_ui_thread(root, invoked.append, "scheduled")
+    assert len(scheduled) == 1
+
+    root._disposed = True
+    scheduled[0]()
+
+    assert invoked == []
+
+
+def test_run_bg_restores_busy_state_and_reports_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    launcher_gui = _load_launcher_gui()
+
+    class ImmediateThread:
+        def __init__(self, *, target, daemon):
+            self._target = target
+            self.daemon = daemon
+
+        def start(self) -> None:
+            self._target()
+
+    monkeypatch.setattr(launcher_gui.threading, "Thread", ImmediateThread)
+
+    class DummyLauncher:
+        def __init__(self) -> None:
+            self.busy: list[bool] = []
+            self.logs: list[str] = []
+            self.errors: list[tuple[str, str]] = []
+            self.refreshes = 0
+
+        def _set_busy(self, active: bool) -> None:
+            self.busy.append(active)
+
+        def _log(self, message: str) -> None:
+            self.logs.append(message)
+
+        def _show_error_dialog(self, title: str, message: str) -> None:
+            self.errors.append((title, message))
+
+        def _refresh_status(self) -> None:
+            self.refreshes += 1
+
+    launcher = DummyLauncher()
+
+    def failing_work() -> None:
+        raise RuntimeError("boom")
+
+    launcher_gui.Launcher._run_bg(launcher, "Health test", failing_work)
+
+    assert launcher.busy == [True, False]
+    assert launcher.logs[0] == "== Health test =="
+    assert launcher.logs[-1] == "!! Health test failed: boom"
+    assert launcher.errors == [("Error", "Health test failed:\nboom")]
+    assert launcher.refreshes == 1

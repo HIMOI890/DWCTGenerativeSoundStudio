@@ -60,20 +60,26 @@ public sealed class StudioFileStream
 
 public sealed class StudioApiClient : IDisposable
 {
+    private const string DefaultProjectMediaUrlsRelativePathTemplate = "/v1/projects/{0}/media-urls";
     private readonly IBackendEndpointProvider _endpointProvider;
     private readonly IBackendTokenProvider _tokenProvider;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
+    private readonly string _projectMediaUrlsRelativePathTemplate;
 
     public StudioApiClient(
         IBackendEndpointProvider endpointProvider,
         IBackendTokenProvider tokenProvider,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        string? projectMediaUrlsRelativePathTemplate = null)
     {
         _endpointProvider = endpointProvider;
         _tokenProvider = tokenProvider;
         _httpClient = httpClient ?? new HttpClient();
         _ownsClient = httpClient is null;
+        _projectMediaUrlsRelativePathTemplate = string.IsNullOrWhiteSpace(projectMediaUrlsRelativePathTemplate)
+            ? DefaultProjectMediaUrlsRelativePathTemplate
+            : projectMediaUrlsRelativePathTemplate;
         _httpClient.Timeout = Timeout.InfiniteTimeSpan;
     }
 
@@ -264,16 +270,30 @@ public sealed class StudioApiClient : IDisposable
         string projectId,
         TemplatePackageDto package,
         bool merge,
+        long? expectedRevision,
         CancellationToken cancellationToken = default) =>
         PostJsonAsync<ImportTemplatePackageRequest, ImportTemplatePackageResponse>(
             $"/v1/projects/{EscapeIdentifier(projectId)}/template_package/import",
-            new ImportTemplatePackageRequest { Package = package, Merge = merge },
+            new ImportTemplatePackageRequest
+            {
+                Package = package,
+                Merge = merge,
+                ExpectedRevision = expectedRevision,
+            },
             cancellationToken);
+
+    public Task<ImportTemplatePackageResponse> ImportProjectTemplatePackageAsync(
+        string projectId,
+        TemplatePackageDto package,
+        bool merge,
+        CancellationToken cancellationToken = default) =>
+        ImportProjectTemplatePackageAsync(projectId, package, merge, null, cancellationToken);
 
     public Task<ApplyPlanToTimelineResponse> ApplyPlanToTimelineAsync(
         string projectId,
         int variantIndex,
         bool overwrite,
+        long? expectedRevision,
         CancellationToken cancellationToken = default) =>
         PostJsonAsync<ApplyPlanToTimelineRequest, ApplyPlanToTimelineResponse>(
             $"/v1/projects/{EscapeIdentifier(projectId)}/timeline/apply_plan",
@@ -281,13 +301,22 @@ public sealed class StudioApiClient : IDisposable
             {
                 VariantIndex = variantIndex,
                 Overwrite = overwrite,
+                ExpectedRevision = expectedRevision,
             },
             cancellationToken);
+
+    public Task<ApplyPlanToTimelineResponse> ApplyPlanToTimelineAsync(
+        string projectId,
+        int variantIndex,
+        bool overwrite,
+        CancellationToken cancellationToken = default) =>
+        ApplyPlanToTimelineAsync(projectId, variantIndex, overwrite, null, cancellationToken);
 
     public Task<ApplyMotionGrammarResponse> ApplyMotionGrammarAsync(
         string projectId,
         IReadOnlyList<MotionPhraseRequest> phrases,
         bool overwriteMotionTrack,
+        long? expectedRevision,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(phrases);
@@ -298,14 +327,22 @@ public sealed class StudioApiClient : IDisposable
 
         return PostJsonAsync<ApplyMotionGrammarRequest, ApplyMotionGrammarResponse>(
             $"/v1/projects/{EscapeIdentifier(projectId)}/motion_grammar/apply",
-            new ApplyMotionGrammarRequest(phrases, overwriteMotionTrack),
+            new ApplyMotionGrammarRequest(phrases, overwriteMotionTrack, expectedRevision),
             cancellationToken);
     }
+
+    public Task<ApplyMotionGrammarResponse> ApplyMotionGrammarAsync(
+        string projectId,
+        IReadOnlyList<MotionPhraseRequest> phrases,
+        bool overwriteMotionTrack,
+        CancellationToken cancellationToken = default) =>
+        ApplyMotionGrammarAsync(projectId, phrases, overwriteMotionTrack, null, cancellationToken);
 
     public Task<UpdatePlanVariantResponse> UpdatePlanVariantAsync(
         string projectId,
         int variantIndex,
         IReadOnlyList<PlanSceneDto> scenes,
+        long? expectedRevision,
         CancellationToken cancellationToken = default) =>
         PostJsonAsync<UpdatePlanVariantRequest, UpdatePlanVariantResponse>(
             $"/v1/projects/{EscapeIdentifier(projectId)}/plan/variant",
@@ -313,8 +350,16 @@ public sealed class StudioApiClient : IDisposable
             {
                 VariantIndex = variantIndex,
                 Scenes = scenes,
+                ExpectedRevision = expectedRevision,
             },
             cancellationToken);
+
+    public Task<UpdatePlanVariantResponse> UpdatePlanVariantAsync(
+        string projectId,
+        int variantIndex,
+        IReadOnlyList<PlanSceneDto> scenes,
+        CancellationToken cancellationToken = default) =>
+        UpdatePlanVariantAsync(projectId, variantIndex, scenes, null, cancellationToken);
 
     public Task<JsonElement> ImportPlannerLabAsync(
         string projectId,
@@ -624,11 +669,31 @@ public sealed class StudioApiClient : IDisposable
     public Task<JsonElement> SaveTimelineAsync(
         string projectId,
         JsonElement timeline,
+        long? expectedRevision,
         CancellationToken cancellationToken = default) =>
         PostJsonElementAsync(
             $"/v1/projects/{EscapeIdentifier(projectId)}/timeline",
-            new TimelineUpdateRequest(timeline),
+            new TimelineUpdateRequest(timeline, expectedRevision),
             StudioJson.GetTypeInfo<TimelineUpdateRequest>(),
+            cancellationToken);
+
+    public Task<JsonElement> SaveTimelineAsync(
+        string projectId,
+        JsonElement timeline,
+        CancellationToken cancellationToken = default) =>
+        SaveTimelineAsync(projectId, timeline, null, cancellationToken);
+
+    public Task<JsonElement> AutosaveTimelineAsync(
+        string projectId,
+        JsonElement timeline,
+        JsonElement? metadata,
+        string? reason,
+        long? expectedRevision,
+        CancellationToken cancellationToken = default) =>
+        PostJsonElementAsync(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/autosave",
+            new TimelineAutosaveRequest(timeline, metadata, reason, expectedRevision),
+            StudioJson.GetTypeInfo<TimelineAutosaveRequest>(),
             cancellationToken);
 
     public Task<JsonElement> AutosaveTimelineAsync(
@@ -637,11 +702,7 @@ public sealed class StudioApiClient : IDisposable
         JsonElement? metadata = null,
         string? reason = null,
         CancellationToken cancellationToken = default) =>
-        PostJsonElementAsync(
-            $"/v1/projects/{EscapeIdentifier(projectId)}/autosave",
-            new TimelineAutosaveRequest(timeline, metadata, reason),
-            StudioJson.GetTypeInfo<TimelineAutosaveRequest>(),
-            cancellationToken);
+        AutosaveTimelineAsync(projectId, timeline, metadata, reason, null, cancellationToken);
 
     public Task<TimelineRenderResponse> QueueTimelineRenderAsync(
         string projectId,
@@ -1104,6 +1165,79 @@ public sealed class StudioApiClient : IDisposable
             .ConfigureAwait(false);
     }
 
+    public Task<SignedMediaUrlBatchResponse> GetProjectMediaUrlsAsync(
+        string projectId,
+        IEnumerable<SignedMediaUrlRequest> requests,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+        SignedMediaUrlRequest[] normalizedRequests = requests
+            .Select(NormalizeSignedMediaUrlRequest)
+            .ToArray();
+        if (normalizedRequests.Length == 0)
+        {
+            throw new ArgumentException("At least one signed media request is required.", nameof(requests));
+        }
+
+        return PostJsonAsync<SignedMediaUrlBatchRequest, SignedMediaUrlBatchResponse>(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                _projectMediaUrlsRelativePathTemplate,
+                EscapeIdentifier(projectId)),
+            new SignedMediaUrlBatchRequest
+            {
+                Requests = [.. normalizedRequests]
+            },
+            cancellationToken);
+    }
+
+    public async Task<Uri> GetProjectMediaUrlAsync(
+        string projectId,
+        SignedMediaUrlRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        SignedMediaUrlRequest normalizedRequest = NormalizeSignedMediaUrlRequest(request);
+        SignedMediaUrlBatchResponse response = await GetProjectMediaUrlsAsync(
+                projectId,
+                [normalizedRequest],
+                cancellationToken)
+            .ConfigureAwait(false);
+        SignedMediaUrlResponse resolved = response.Urls.SingleOrDefault()
+            ?? throw new InvalidOperationException("Studio did not return a signed media URL.");
+        if (!string.Equals(resolved.Purpose, normalizedRequest.Purpose, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Studio returned a signed media URL for an unexpected purpose.");
+        }
+
+        return ResolveStreamTarget(resolved.Url);
+    }
+
+    public async Task<TResult> StreamProjectPreviewFileAsync<TResult>(
+        string projectId,
+        string relativePath,
+        Func<StudioFileStream, CancellationToken, Task<TResult>> callback,
+        CancellationToken cancellationToken = default)
+    {
+        string normalizedPath = RequireValue(relativePath, nameof(relativePath));
+        try
+        {
+            Uri signedTarget = await GetProjectMediaUrlAsync(
+                    projectId,
+                    new SignedMediaUrlRequest
+                    {
+                        Purpose = "file",
+                        Path = normalizedPath
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return await StreamResponseAsync(signedTarget, callback, cancellationToken).ConfigureAwait(false);
+        }
+        catch (StudioApiException exception) when (ShouldFallbackToLegacyProjectFileRoute(exception))
+        {
+            return await StreamProjectFileAsync(projectId, normalizedPath, callback, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     public async Task<TResult> StreamProjectFileAsync<TResult>(
         string projectId,
         string relativePath,
@@ -1114,6 +1248,33 @@ public sealed class StudioApiClient : IDisposable
         var requestPath =
             $"/v1/projects/{EscapeIdentifier(projectId)}/file?path={Uri.EscapeDataString(path)}";
         return await StreamResponseAsync(requestPath, callback, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<TResult> StreamResponseAsync<TResult>(
+        Uri requestUri,
+        Func<StudioFileStream, CancellationToken, Task<TResult>> callback,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(requestUri);
+        ArgumentNullException.ThrowIfNull(callback);
+        using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+        request.Headers.Accept.Clear();
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("*/*"));
+
+        using var response = await _httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var scopedFile = new StudioFileStream(
+            stream,
+            response.Content.Headers,
+            response.Headers,
+            response.StatusCode);
+        return await callback(scopedFile, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<TResult> StreamResponseAsync<TResult>(
@@ -1770,6 +1931,58 @@ public sealed class StudioApiClient : IDisposable
 
     private static string Invariant(double value) => value.ToString(CultureInfo.InvariantCulture);
 
+    private SignedMediaUrlRequest NormalizeSignedMediaUrlRequest(SignedMediaUrlRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        string purpose = RequireValue(request.Purpose, nameof(request.Purpose)).ToLowerInvariant();
+        if (purpose is not ("file" or "audio" or "preview"))
+        {
+            throw new ArgumentException("Signed media purpose must be file, audio, or preview.", nameof(request));
+        }
+
+        string? path = string.IsNullOrWhiteSpace(request.Path) ? null : request.Path.Trim();
+        if (purpose is "file" or "audio")
+        {
+            path = RequireValue(path, nameof(request.Path));
+        }
+
+        if (request.Query.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null or JsonValueKind.Object))
+        {
+            throw new ArgumentException("Signed media query payloads must be JSON objects when provided.", nameof(request));
+        }
+
+        return new SignedMediaUrlRequest
+        {
+            Purpose = purpose,
+            Path = path,
+            Query = request.Query.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
+                ? default
+                : request.Query.Clone()
+        };
+    }
+
+    private Uri ResolveStreamTarget(string target)
+    {
+        string normalizedTarget = RequireValue(target, nameof(target));
+        if (Uri.TryCreate(normalizedTarget, UriKind.Absolute, out Uri? absoluteTarget))
+        {
+            if (!absoluteTarget.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+                !absoluteTarget.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Studio signed media URLs must use HTTP or HTTPS.");
+            }
+
+            return absoluteTarget;
+        }
+
+        return new Uri(_endpointProvider.CurrentBackendUri, normalizedTarget);
+    }
+
+    internal static bool ShouldFallbackToLegacyProjectFileRoute(StudioApiException exception)
+        => exception.StatusCode is HttpStatusCode.NotFound
+            or HttpStatusCode.MethodNotAllowed
+            or HttpStatusCode.NotImplemented;
+
     private async Task<HttpRequestMessage> CreateRequestAsync(
         HttpMethod method,
         string relativePath,
@@ -1804,7 +2017,7 @@ public sealed class StudioApiClient : IDisposable
         return request;
     }
 
-    private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    internal static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         if (response.IsSuccessStatusCode)
         {
@@ -1822,6 +2035,21 @@ public sealed class StudioApiClient : IDisposable
         }
 
         var error = ParseError(body);
+        if (response.StatusCode == HttpStatusCode.Conflict &&
+            string.Equals(
+                error.Code,
+                ProjectRevisionConflictException.ErrorCode,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ProjectRevisionConflictException(
+                error.Message,
+                error.Hint,
+                error.ProjectId,
+                error.ExpectedRevision,
+                error.ActualRevision,
+                response.Headers.WwwAuthenticate.Any());
+        }
+
         throw new StudioApiException(
             response.StatusCode,
             error.Code,
@@ -1830,7 +2058,7 @@ public sealed class StudioApiClient : IDisposable
             response.Headers.WwwAuthenticate.Any());
     }
 
-    private static (string Code, string Message, string Hint) ParseError(string body)
+    private static ApiError ParseError(string body)
     {
         try
         {
@@ -1838,10 +2066,20 @@ public sealed class StudioApiClient : IDisposable
             var root = document.RootElement;
             if (root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object)
             {
-                return (
+                JsonElement details = error.TryGetProperty("details", out var nestedDetails) &&
+                                      nestedDetails.ValueKind == JsonValueKind.Object
+                    ? nestedDetails
+                    : default;
+                return new ApiError(
                     ReadString(error, "code") ?? "HTTP_ERROR",
                     ReadString(error, "message") ?? "Studio request failed.",
-                    ReadString(error, "hint") ?? "Review the request and backend status, then retry.");
+                    ReadString(error, "hint") ?? "Review the request and backend status, then retry.",
+                    ReadString(error, "project_id") ?? ReadString(details, "project_id"),
+                    ReadInt64(error, "expected_revision") ?? ReadInt64(details, "expected_revision"),
+                    ReadInt64(error, "actual_revision") ??
+                    ReadInt64(error, "current_revision") ??
+                    ReadInt64(details, "actual_revision") ??
+                    ReadInt64(details, "current_revision"));
             }
 
             if (root.TryGetProperty("detail", out var detail))
@@ -1849,14 +2087,17 @@ public sealed class StudioApiClient : IDisposable
                 var message = detail.ValueKind == JsonValueKind.String
                     ? detail.GetString()
                     : detail.GetRawText();
-                return ("VALIDATION_ERROR", message ?? "Studio rejected the request.", "Check the highlighted values and retry.");
+                return new ApiError(
+                    "VALIDATION_ERROR",
+                    message ?? "Studio rejected the request.",
+                    "Check the highlighted values and retry.");
             }
         }
         catch
         {
         }
 
-        return ("HTTP_ERROR", "Studio request failed.", "Check the backend connection and retry.");
+        return new ApiError("HTTP_ERROR", "Studio request failed.", "Check the backend connection and retry.");
     }
 
     private static string EscapeIdentifier(string value)
@@ -1989,9 +2230,38 @@ public sealed class StudioApiClient : IDisposable
         left.Port == right.Port;
 
     private static string? ReadString(JsonElement parent, string name) =>
-        parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+        parent.ValueKind == JsonValueKind.Object &&
+        parent.TryGetProperty(name, out var value) &&
+        value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static long? ReadInt64(JsonElement parent, string name)
+    {
+        if (parent.ValueKind != JsonValueKind.Object ||
+            !parent.TryGetProperty(name, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out long number))
+        {
+            return number;
+        }
+
+        return value.ValueKind == JsonValueKind.String &&
+               long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number)
+            ? number
+            : null;
+    }
+
+    private sealed record ApiError(
+        string Code,
+        string Message,
+        string Hint,
+        string? ProjectId = null,
+        long? ExpectedRevision = null,
+        long? ActualRevision = null);
 
     public void Dispose()
     {
@@ -2002,7 +2272,7 @@ public sealed class StudioApiClient : IDisposable
     }
 }
 
-public sealed class StudioApiException : Exception
+public class StudioApiException : Exception
 {
     public StudioApiException(
         HttpStatusCode statusCode,
@@ -2024,4 +2294,29 @@ public sealed class StudioApiException : Exception
     public bool AuthenticationChallenge { get; }
 
     public string UserFacingMessage => string.IsNullOrWhiteSpace(Hint) ? Message : $"{Message} {Hint}";
+}
+
+public sealed class ProjectRevisionConflictException : StudioApiException
+{
+    public const string ErrorCode = "PROJECT_REVISION_CONFLICT";
+
+    public ProjectRevisionConflictException(
+        string message,
+        string hint,
+        string? projectId,
+        long? expectedRevision,
+        long? actualRevision,
+        bool authenticationChallenge = false)
+        : base(HttpStatusCode.Conflict, ErrorCode, message, hint, authenticationChallenge)
+    {
+        ProjectId = projectId;
+        ExpectedRevision = expectedRevision;
+        ActualRevision = actualRevision;
+    }
+
+    public string? ProjectId { get; }
+
+    public long? ExpectedRevision { get; }
+
+    public long? ActualRevision { get; }
 }

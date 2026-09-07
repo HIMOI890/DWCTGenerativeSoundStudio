@@ -41,6 +41,32 @@ internal static class StudioPageHelpers
 
     public static string GetUserFacingError(Exception exception) => UserMessage(exception);
 
+    public static long? ExpectedRevision(ProjectDto? project) =>
+        project is { Revision: > 0 } ? project.Revision : null;
+
+    public static async Task<bool> ConfirmReloadAfterRevisionConflictAsync(
+        XamlRoot xamlRoot,
+        ProjectRevisionConflictException conflict)
+    {
+        string revisionDetail = conflict.ExpectedRevision is long expected &&
+                                conflict.ActualRevision is long actual
+            ? $" This window had revision {expected}; the project is now revision {actual}."
+            : string.Empty;
+        var dialog = new ContentDialog
+        {
+            XamlRoot = xamlRoot,
+            Title = "Project changed elsewhere",
+            Content =
+                $"Your change was not applied because another operation updated this project.{revisionDetail} " +
+                "Reload the latest project, review your local changes, then retry. Studio will not retry the change automatically.",
+            PrimaryButtonText = "Reload project",
+            CloseButtonText = "Review local changes",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
     public static string FormatJson(JsonNode? value)
     {
         if (value is null)

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using EdmgStudio.Core.Models;
+using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -15,6 +16,7 @@ public sealed partial class AiPlannerLabPage : Page
     private readonly StudioSessionService _session = App.Services.Session;
     private CancellationTokenSource? _operationCancellation;
     private List<ProjectDto> _projects = [];
+    private ProjectDto? _project;
     private PlanDto? _plan;
     private int _selectedVariantIndex = -1;
     private int _selectedSceneIndex = -1;
@@ -87,6 +89,7 @@ public sealed partial class AiPlannerLabPage : Page
     private async Task LoadProjectAsync(string projectId, CancellationToken cancellationToken)
     {
         var response = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        _project = response.Project;
         _session.ActiveProjectId = response.Project.Id;
         if (response.VisualDna.ValueKind == JsonValueKind.Object)
         {
@@ -184,8 +187,7 @@ public sealed partial class AiPlannerLabPage : Page
             {
                 _plan = await App.Services.ApiClient.GeneratePlanAsync(project.Id, request, mode, cancellationToken);
                 PresentPlan();
-                var refreshed = await App.Services.ApiClient.GetProjectAsync(project.Id, cancellationToken);
-                _session.ActiveProjectId = refreshed.Project.Id;
+                await RefreshProjectRevisionAsync(project.Id, cancellationToken);
             },
             successMessage: $"Generated {_plan?.Variants.Count ?? 0} plan variants.");
     }
@@ -208,7 +210,8 @@ public sealed partial class AiPlannerLabPage : Page
             NullIfWhiteSpace(CreativeBriefTextBox.Text),
             NullIfWhiteSpace(PlannerWorkflow.BuildStylePreferences(creativeSettings)),
             (int)VariantCountNumberBox.Value,
-            (int)SceneCountNumberBox.Value);
+            (int)SceneCountNumberBox.Value,
+            StudioPageHelpers.ExpectedRevision(_project));
     }
 
     private void PresentPlan()
@@ -311,8 +314,10 @@ public sealed partial class AiPlannerLabPage : Page
                 project.Id,
                 _selectedVariantIndex,
                 true,
+                StudioPageHelpers.ExpectedRevision(_project),
                 cancellationToken),
-            successMessage: "The selected variant is now applied to Timeline.");
+            successMessage: "The selected variant is now applied to Timeline.",
+            afterSuccess: cancellationToken => RefreshProjectRevisionAsync(project.Id, cancellationToken));
     }
 
     private void SceneListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -429,6 +434,7 @@ public sealed partial class AiPlannerLabPage : Page
             var json = await FileIO.ReadTextAsync(file);
             var request = JsonSerializer.Deserialize(json, StudioJson.GetTypeInfo<PlannerLabImportRequest>())
                           ?? throw new JsonException("The file did not contain a Planner import document.");
+            request.ExpectedRevision = StudioPageHelpers.ExpectedRevision(_project);
             await RunOperationAsync(
                 "Importing Planner document",
                 async cancellationToken =>
@@ -436,8 +442,7 @@ public sealed partial class AiPlannerLabPage : Page
                     var response = await App.Services.ApiClient.ImportPlannerLabAsync(project.Id, request, cancellationToken);
                     _plan = response.Plan;
                     PresentPlan();
-                    var refreshed = await App.Services.ApiClient.GetProjectAsync(project.Id, cancellationToken);
-                    _session.ActiveProjectId = refreshed.Project.Id;
+                    await RefreshProjectRevisionAsync(project.Id, cancellationToken);
                 },
                 successMessage: $"Imported {file.Name}.");
         }
@@ -850,6 +855,7 @@ public sealed partial class AiPlannerLabPage : Page
                     project.Id,
                     _selectedVariantIndex,
                     variant.Scenes,
+                    StudioPageHelpers.ExpectedRevision(_project),
                     cancellationToken);
                 if (!response.Ok || response.Plan is null)
                 {
@@ -867,6 +873,7 @@ public sealed partial class AiPlannerLabPage : Page
                 _selectedSceneIndex = sceneIndex;
                 _session.SelectedVariantIndex = _selectedVariantIndex;
                 PresentPlan();
+                await RefreshProjectRevisionAsync(project.Id, cancellationToken);
                 saved = true;
             },
             successMessage: "Curated scenes were saved to the project.");
@@ -908,7 +915,8 @@ public sealed partial class AiPlannerLabPage : Page
     private async Task RunOperationAsync(
         string title,
         Func<CancellationToken, Task> operation,
-        string? successMessage = null)
+        string? successMessage = null,
+        Func<CancellationToken, Task>? afterSuccess = null)
     {
         _operationCancellation?.Cancel();
         var operationCancellation = new CancellationTokenSource();
@@ -918,6 +926,11 @@ public sealed partial class AiPlannerLabPage : Page
         try
         {
             await operation(operationCancellation.Token);
+            if (afterSuccess is not null)
+            {
+                await afterSuccess(operationCancellation.Token);
+            }
+
             if (!string.IsNullOrWhiteSpace(successMessage))
             {
                 ShowStatus(InfoBarSeverity.Success, "Planner updated", successMessage);
@@ -926,6 +939,14 @@ public sealed partial class AiPlannerLabPage : Page
         catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
         {
             ShowStatus(InfoBarSeverity.Warning, "Operation canceled", "No additional Planner changes were requested.");
+        }
+        catch (ProjectRevisionConflictException conflict)
+        {
+            await HandleProjectRevisionConflictAsync(conflict, operationCancellation.Token);
+        }
+        catch (StudioApiException ex)
+        {
+            ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.UserFacingMessage);
         }
         catch (InvalidDataException ex)
         {
@@ -951,6 +972,57 @@ public sealed partial class AiPlannerLabPage : Page
         Func<CancellationToken, Task<T>> operation,
         string? successMessage = null) =>
         await RunOperationAsync(title, async cancellationToken => _ = await operation(cancellationToken), successMessage);
+
+    private async Task RefreshProjectRevisionAsync(string projectId, CancellationToken cancellationToken)
+    {
+        ProjectResponse refreshed = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        _project = refreshed.Project;
+        _session.ActiveProjectId = refreshed.Project.Id;
+    }
+
+    private async Task HandleProjectRevisionConflictAsync(
+        ProjectRevisionConflictException conflict,
+        CancellationToken cancellationToken)
+    {
+        if (!await StudioPageHelpers.ConfirmReloadAfterRevisionConflictAsync(XamlRoot, conflict))
+        {
+            ShowStatus(
+                InfoBarSeverity.Warning,
+                "Project reload required",
+                "The failed change was not applied. Review your local Planner work, reload, then retry.");
+            return;
+        }
+
+        string? projectId = _project?.Id ?? _session.ActiveProjectId;
+        if (string.IsNullOrWhiteSpace(projectId))
+        {
+            return;
+        }
+
+        try
+        {
+            await LoadProjectAsync(projectId, cancellationToken);
+            ShowStatus(
+                InfoBarSeverity.Informational,
+                "Project reloaded",
+                "The latest revision is loaded. Review the plan, then retry your change.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (StudioApiException reloadError)
+        {
+            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.UserFacingMessage);
+        }
+        catch (HttpRequestException reloadError)
+        {
+            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
+        }
+        catch (JsonException reloadError)
+        {
+            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
+        }
+    }
 
     private void SetBusy(bool isBusy)
     {

@@ -9,6 +9,70 @@ let backendAuthTokenLoaded = false;
 export type ApiRequestOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
+  expectedRevision?: number | null;
+};
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+  readonly code: string;
+  readonly expectedRevision: number | null;
+  readonly actualRevision: number | null;
+
+  constructor(message: string, status: number, body: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+    const payload = body && typeof body === "object" ? body as Record<string, any> : {};
+    const detail = payload.detail && typeof payload.detail === "object" ? payload.detail : {};
+    const error = payload.error && typeof payload.error === "object" ? payload.error : {};
+    this.code = String(error.code ?? detail.code ?? payload.code ?? "");
+    this.expectedRevision = readRevision(
+      error.expected_revision,
+      detail.expected_revision,
+      payload.expected_revision,
+    );
+    this.actualRevision = readRevision(
+      error.actual_revision,
+      error.current_revision,
+      detail.actual_revision,
+      detail.current_revision,
+      payload.actual_revision,
+      payload.current_revision,
+    );
+  }
+}
+
+function readRevision(...values: unknown[]): number | null {
+  for (const value of values) {
+    const revision = Number(value);
+    if (Number.isInteger(revision) && revision >= 0) return revision;
+  }
+  return null;
+}
+
+export function isProjectRevisionConflict(error: unknown): error is ApiError {
+  if (!(error instanceof ApiError) || error.status !== 409) return false;
+  return error.actualRevision != null
+    || error.expectedRevision != null
+    || /revision|stale|conflict/i.test(`${error.code} ${error.message}`);
+}
+
+export type SignedProjectMediaRequest = {
+  purpose: "file" | "audio" | "preview";
+  path?: string;
+  query?: Record<string, unknown>;
+};
+
+export type SignedProjectMediaUrl = {
+  purpose: SignedProjectMediaRequest["purpose"];
+  url: string;
+};
+
+export type SignedProjectMediaBatch = {
+  expires_at: number | string;
+  urls: SignedProjectMediaUrl[];
 };
 
 export function isRequestAbortError(error: unknown): boolean {
@@ -328,10 +392,14 @@ function formatBackendError(d: any, fallback: string): string {
   return fallback;
 }
 
+function backendError(response: Response, data: unknown, fallback: string): ApiError {
+  return new ApiError(formatBackendError(data, fallback), response.status, data);
+}
+
 export async function apiGet(path: string, options: ApiRequestOptions = {}) {
   const r = await apiFetch(path, {}, options);
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(formatBackendError(d, `GET ${path} failed`));
+  if (!r.ok) throw backendError(r, d, `GET ${path} failed`);
   return d;
 }
 
@@ -342,7 +410,7 @@ export async function apiPost(path: string, body: any, options: ApiRequestOption
     body: JSON.stringify(body),
   }, options);
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(formatBackendError(d, `POST ${path} failed`));
+  if (!r.ok) throw backendError(r, d, `POST ${path} failed`);
   return d;
 }
 
@@ -353,22 +421,83 @@ export async function apiPatch(path: string, body: any, options: ApiRequestOptio
     body: JSON.stringify(body),
   }, options);
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(formatBackendError(d, `PATCH ${path} failed`));
+  if (!r.ok) throw backendError(r, d, `PATCH ${path} failed`);
   return d;
 }
 
 export async function apiDelete(path: string, options: ApiRequestOptions = {}) {
   const r = await apiFetch(path, { method: "DELETE" }, options);
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(formatBackendError(d, `DELETE ${path} failed`));
+  if (!r.ok) throw backendError(r, d, `DELETE ${path} failed`);
   return d;
 }
 
 export async function apiUpload(path: string, file: File, options: ApiRequestOptions = {}) {
   const fd = new FormData();
   fd.append("file", file);
+  if (Number.isInteger(options.expectedRevision) && Number(options.expectedRevision) >= 0) {
+    fd.append("expected_revision", String(options.expectedRevision));
+  }
   const r = await apiFetch(path, { method: "POST", body: fd }, options);
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(formatBackendError(d, `UPLOAD ${path} failed`));
+  if (!r.ok) throw backendError(r, d, `UPLOAD ${path} failed`);
   return d;
+}
+
+export async function issueProjectMediaUrls(
+  projectId: string,
+  requests: SignedProjectMediaRequest[],
+  options: ApiRequestOptions = {},
+): Promise<SignedProjectMediaBatch> {
+  const safeProjectId = String(projectId || "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(safeProjectId)) {
+    throw new Error("Invalid project identifier.");
+  }
+  if (!Array.isArray(requests) || requests.length === 0) {
+    throw new Error("At least one signed media request is required.");
+  }
+
+  const normalizedRequests = requests.map((request) => {
+    const purpose = String(request?.purpose || "").toLowerCase();
+    if (purpose !== "file" && purpose !== "audio" && purpose !== "preview") {
+      throw new Error("Signed media purpose must be file, audio, or preview.");
+    }
+    const path = String(request.path || "").trim().replace(/\\/g, "/");
+    if ((purpose === "file" || purpose === "audio")
+      && (!path || path.startsWith("/") || path.split("/").some((part) => !part || part === ".."))) {
+      throw new Error("Invalid project-relative media path.");
+    }
+    if (request.query != null && (typeof request.query !== "object" || Array.isArray(request.query))) {
+      throw new Error("Signed media query must be an object.");
+    }
+    return {
+      purpose,
+      ...(path ? { path } : {}),
+      ...(request.query ? { query: request.query } : {}),
+    } satisfies SignedProjectMediaRequest;
+  });
+
+  const data = await apiPost(
+    `/v1/projects/${encodeURIComponent(safeProjectId)}/media-urls`,
+    { requests: normalizedRequests },
+    options,
+  ) as SignedProjectMediaBatch;
+  if (!data || !Array.isArray(data.urls) || data.urls.length !== normalizedRequests.length) {
+    throw new Error("Studio returned an invalid signed media URL batch.");
+  }
+  const backendUrl = await getBackendUrlAsync();
+  const urls = data.urls.map((item, index) => {
+    if (!item || item.purpose !== normalizedRequests[index]?.purpose || !String(item.url || "").trim()) {
+      throw new Error("Studio returned a signed media URL for an unexpected purpose.");
+    }
+    const resolved = new URL(String(item.url).trim(), `${backendUrl}/`);
+    if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
+      throw new Error("Studio signed media URLs must use HTTP or HTTPS.");
+    }
+    return { purpose: item.purpose, url: resolved.toString() };
+  });
+  if (Number.isNaN(new Date(data.expires_at).getTime()) && !Number.isFinite(Number(data.expires_at))) {
+    throw new Error("Studio returned an invalid signed media expiry.");
+  }
+  return { expires_at: data.expires_at, urls };
 }

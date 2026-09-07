@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { apiGet, apiPost } from "../../components/api";
+import { apiGet, apiPost, isRequestAbortError } from "../../components/api";
+import { useAdaptivePolling } from "../../hooks/useAdaptivePolling";
 import { postQueueJobAction, type QueueJobAction } from "./jobActions";
+import { countActiveJobs } from "./jobRuntime";
 import type { StudioJob } from "./jobStatus";
 
 export type JobLogSelection = {
@@ -29,30 +31,33 @@ export function useProjectJobs(options: UseProjectJobsOptions) {
   const [lastRefreshAt, setLastRefreshAt] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const fetchJobs = useCallback(async (signal?: AbortSignal): Promise<StudioJob[]> => {
     setError(null);
     try {
+      let nextJobs: StudioJob[] = [];
       if (global) {
-        const data = await apiGet("/v1/jobs");
-        setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
+        const data = await apiGet("/v1/jobs", { signal });
+        nextJobs = Array.isArray(data?.jobs) ? data.jobs : [];
       } else if (projectId) {
-        const data = await apiGet(`/v1/projects/${projectId}/jobs`);
-        setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
-      } else {
-        setJobs([]);
+        const data = await apiGet(`/v1/projects/${projectId}/jobs`, { signal });
+        nextJobs = Array.isArray(data?.jobs) ? data.jobs : [];
       }
+      setJobs(nextJobs);
       setLastRefreshAt(Date.now());
+      return nextJobs;
     } catch (err) {
+      if (isRequestAbortError(err)) throw err;
       setError(String(err));
+      throw err;
     }
   }, [global, projectId]);
 
-  const loadJobLog = useCallback(async (job: StudioJob) => {
+  const fetchJobLog = useCallback(async (job: StudioJob, signal?: AbortSignal) => {
     setError(null);
     try {
       const [logData, eventsData] = await Promise.all([
-        apiGet(`/v1/projects/${job.project_id}/jobs/${job.id}/log`),
-        apiGet(`/v1/projects/${job.project_id}/jobs/${job.id}/events`),
+        apiGet(`/v1/projects/${job.project_id}/jobs/${job.id}/log`, { signal }),
+        apiGet(`/v1/projects/${job.project_id}/jobs/${job.id}/events`, { signal }),
       ]);
       setSelectedLog({
         job,
@@ -60,9 +65,38 @@ export function useProjectJobs(options: UseProjectJobsOptions) {
         events: Array.isArray(eventsData?.events) ? eventsData.events : [],
       });
     } catch (err) {
+      if (isRequestAbortError(err)) throw err;
       setError(String(err));
+      throw err;
     }
   }, []);
+
+  const poll = useCallback(async (signal: AbortSignal) => {
+    const nextJobs = await fetchJobs(signal);
+    if (selectedLog?.job) await fetchJobLog(selectedLog.job, signal);
+    return countActiveJobs(nextJobs) > 0;
+  }, [fetchJobLog, fetchJobs, selectedLog?.job]);
+
+  const polling = useAdaptivePolling({
+    poll,
+    enabled: !!(global || projectId) && autoRefresh,
+    activeIntervalMs: refreshIntervalMs,
+    idleIntervalMs: refreshIntervalMs,
+    scopeKey: global ? "global" : projectId,
+  });
+
+  const refresh = useCallback(async () => {
+    if (autoRefresh) {
+      polling.pollNow();
+      return;
+    }
+    await fetchJobs();
+  }, [autoRefresh, fetchJobs, polling.pollNow]);
+
+  const loadJobLog = useCallback(
+    async (job: StudioJob) => fetchJobLog(job),
+    [fetchJobLog],
+  );
 
   const runJobAction = useCallback(
     async (job: StudioJob, action: QueueJobAction) => {
@@ -117,19 +151,9 @@ export function useProjectJobs(options: UseProjectJobsOptions) {
   }, [refresh]);
 
   useEffect(() => {
-    refresh().catch(() => {});
-  }, [refresh]);
-
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const timer = window.setInterval(async () => {
-      await refresh();
-      if (selectedLog?.job) {
-        await loadJobLog(selectedLog.job);
-      }
-    }, refreshIntervalMs);
-    return () => window.clearInterval(timer);
-  }, [autoRefresh, loadJobLog, refresh, refreshIntervalMs, selectedLog?.job]);
+    if (autoRefresh) return;
+    fetchJobs().catch(() => {});
+  }, [autoRefresh, fetchJobs]);
 
   return {
     jobs,

@@ -382,6 +382,70 @@ def test_linux_launchers_override_inherited_hugging_face_cache_paths() -> None:
             )
 
 
+def test_linux_ollama_setup_uses_pinned_verified_release_artifacts() -> None:
+    script_path = STUDIO_ROOT / "scripts" / "setup_linux_ollama.sh"
+    lock_path = STUDIO_ROOT / "scripts" / "setup_linux_ollama.lock.sh"
+    script_text = script_path.read_text(encoding="utf-8")
+    lock_text = lock_path.read_text(encoding="utf-8")
+
+    assert 'source "${SCRIPT_DIR}/setup_linux_ollama.lock.sh"' in script_text
+    assert 'OLLAMA_MODELS="${OLLAMA_MODELS:-${EDMG_STUDIO_MODELS_DIR}/ollama}"' in script_text
+    assert 'OLLAMA_LOG_DIR="${OLLAMA_LOG_DIR:-${EDMG_STUDIO_LOGS_DIR}}"' in script_text
+    assert 'OLLAMA_ALLOW_VERSION_OVERRIDE="${OLLAMA_ALLOW_VERSION_OVERRIDE:-0}"' in script_text
+    assert "download_verified_file" in script_text
+    assert "stop_tracked_pid" in script_text
+    assert "OLLAMA_PID_FILE" in script_text
+    assert "ollama.com/install.sh" not in script_text
+    assert "pkill" not in script_text
+    assert "/tmp/" not in script_text
+
+    assert 'EDMG_LOCKED_OLLAMA_VERSION="v0.33.3"' in lock_text
+    assert "EDMG_LOCKED_OLLAMA_SHA256_AMD64" in lock_text
+    assert "EDMG_LOCKED_OLLAMA_SHA256_ARM64" in lock_text
+
+
+def test_linux_comfyui_setup_pins_repos_and_uses_checked_in_snapshots() -> None:
+    script_path = STUDIO_ROOT / "scripts" / "setup_linux_comfyui.sh"
+    lock_path = STUDIO_ROOT / "scripts" / "setup_linux_comfyui.lock.sh"
+    constraints_dir = STUDIO_ROOT / "scripts" / "constraints" / "comfyui"
+    script_text = script_path.read_text(encoding="utf-8")
+    lock_text = lock_path.read_text(encoding="utf-8")
+
+    assert 'source "${SCRIPT_DIR}/setup_linux_comfyui.lock.sh"' in script_text
+    assert 'CONSTRAINTS_DIR="${SCRIPT_DIR}/constraints/comfyui"' in script_text
+    assert 'COMFY_ROOT="${COMFY_ROOT:-${EDMG_STUDIO_EXTERNAL_DIR}/ComfyUI}"' in script_text
+    assert 'COMFY_LOG_DIR="${COMFY_LOG_DIR:-${EDMG_STUDIO_LOGS_DIR}}"' in script_text
+    assert 'COMFY_ALLOW_VERSION_OVERRIDE="${COMFY_ALLOW_VERSION_OVERRIDE:-0}"' in script_text
+    assert "sync_pinned_repo" in script_text
+    assert "install_snapshot_requirements" in script_text
+    assert "download_verified_model" in script_text
+    assert "install.py" not in script_text
+    assert "git pull" not in script_text
+    assert "/tmp/" not in script_text
+
+    for name in (
+        "comfyui-requirements.txt",
+        "comfyui-manager-requirements.txt",
+        "comfyui-animatediff-evolved-requirements.txt",
+        "comfyui-stable-video-diffusion-requirements.txt",
+    ):
+        snapshot = constraints_dir / name
+        assert snapshot.is_file(), f"missing checked-in ComfyUI snapshot: {snapshot}"
+        assert snapshot.read_text(encoding="utf-8").strip(), (
+            f"empty ComfyUI snapshot: {snapshot}"
+        )
+
+    for marker in (
+        "EDMG_LOCKED_COMFYUI_REF",
+        "EDMG_LOCKED_COMFYUI_MANAGER_REF",
+        "EDMG_LOCKED_ANIMATEDIFF_REF",
+        "EDMG_LOCKED_SVD_NODE_REF",
+        "EDMG_LOCKED_SDXL_BASE_SHA256",
+        "EDMG_LOCKED_ANIMATEDIFF_MODEL_SHA256",
+    ):
+        assert marker in lock_text
+
+
 def test_shell_uv_bootstrap_verifies_release_archives() -> None:
     helper = (STUDIO_ROOT / "scripts" / "uv_toolchain.sh").read_text(encoding="utf-8")
     assert "astral.sh/uv" not in helper

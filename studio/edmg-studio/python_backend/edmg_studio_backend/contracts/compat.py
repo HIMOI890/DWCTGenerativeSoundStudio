@@ -63,7 +63,9 @@ def adapt_legacy_project(payload: Mapping[str, Any]) -> ProjectContract:
 
     known = {"id", "project_id", "name", "project_name", "created_at", "updated_at", "meta", "metadata"}
     extensions = {str(key): value for key, value in payload.items() if key not in known}
-    revision_raw = metadata.get("revision", 1)
+    revision_raw = payload.get("revision")
+    if revision_raw is None:
+        revision_raw = metadata.get("revision", 1)
     try:
         revision = max(1, int(revision_raw))
     except (TypeError, ValueError):

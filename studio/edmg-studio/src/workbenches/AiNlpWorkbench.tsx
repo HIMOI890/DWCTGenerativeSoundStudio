@@ -17,7 +17,6 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
-import { apiFetch } from '../components/api';
 import { ProgressBar } from '../components/ProgressBar';
 
 type AnalysisFocus = 'balanced' | 'emotion' | 'visual';
@@ -1377,14 +1376,6 @@ function buildPlannerPlanFromStudioProject(args: {
   };
 }
 
-async function fetchStudioAudioFile(projectId: string, fileName: string): Promise<File | null> {
-  if (!projectId || !fileName) return null;
-  const response = await apiFetch(`/v1/projects/${projectId}/audio`);
-  if (!response.ok || typeof (response as Response & { blob?: () => Promise<Blob> }).blob !== 'function') return null;
-  const blob = await response.blob();
-  return new File([blob], fileName, { type: blob.type || 'audio/*' });
-}
-
 const MetricBar: React.FC<{ label: string; value: number; accent: string }> = ({ label, value, accent }) => (
   <div>
     <div className="mb-1 flex items-center justify-between text-xs text-slate-600">
@@ -1445,6 +1436,7 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
     ].join(':');
     if (!studioProjectId || !studioProject || hydrationKey === studioHydrationKeyRef.current) return;
     studioHydrationKeyRef.current = hydrationKey;
+    setAudioFile(null);
 
     const hydrate = async () => {
       const seedAnalysis =
@@ -1493,21 +1485,8 @@ const AIEnhancedMusicGenerator: React.FC<AiNlpWorkbenchProps> = ({
       if (seedPlan) setPlan(seedPlan);
       setActiveSection(seedPlan?.scenes?.length ? 'prompts' : 'setup');
       setStudioSeedStatus(
-        `Loaded from ${studioProjectName || 'the shared Studio project'}: audio, transcript, and storyboard are already here — no need to re-upload. The subject focus, creative brief, and prompts are pre-filled from the analysis/transcript; adjust them and regenerate any time.`,
+        `Loaded the saved analysis, transcript, and storyboard from ${studioProjectName || 'the shared Studio project'} — no audio download is needed. The subject focus, creative brief, and prompts are pre-filled; adjust them and regenerate any time.`,
       );
-
-      if (studioAudioName && !cancelled) {
-        try {
-          const nextAudioFile = await fetchStudioAudioFile(studioProjectId, studioAudioName);
-          if (!cancelled && nextAudioFile) setAudioFile(nextAudioFile);
-        } catch {
-          if (!cancelled) {
-            setStudioSeedStatus(
-              `Hydrated transcript and storyboard data from ${studioProjectName || 'the shared Studio project'}. Audio could not be reloaded automatically, so choose a local file if you want a new browser-side analysis pass.`,
-            );
-          }
-        }
-      }
     };
 
     void hydrate();

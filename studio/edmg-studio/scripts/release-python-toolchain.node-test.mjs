@@ -10,7 +10,7 @@ import {
   PINNED_UV_VERSION,
   RELEASE_CAPABILITY_EXTRAS,
   REQUIRED_FASTER_WHISPER_VAD_ASSET,
-  REQUIRED_LINUX_SETUP_SCRIPTS,
+  REQUIRED_LINUX_SETUP_FILES,
   assertNoDynamicDependencyOverrides,
   assertPinnedUvVersion,
   assertPython312,
@@ -76,7 +76,7 @@ function validManifest(overrides = {}) {
     sha256: "a".repeat(64),
   }));
   const linuxSetupEntries = platform === "linux"
-    ? REQUIRED_LINUX_SETUP_SCRIPTS.map((entryPath) => ({
+    ? REQUIRED_LINUX_SETUP_FILES.map((entryPath) => ({
       path: entryPath,
       type: "file",
       size: 17,
@@ -152,7 +152,7 @@ function validManifest(overrides = {}) {
       { path: "studio/edmg-studio/python_backend/hf_bucket_helper/uv.lock", sha256: "8".repeat(64) },
       { path: "studio/edmg-studio/launcher_env.defaults.json", sha256: "8".repeat(64) },
       ...(platform === "linux"
-        ? REQUIRED_LINUX_SETUP_SCRIPTS.map((entryPath) => ({
+        ? REQUIRED_LINUX_SETUP_FILES.map((entryPath) => ({
           path: `studio/edmg-studio/${entryPath}`,
           sha256: "b".repeat(64),
         }))
@@ -465,11 +465,11 @@ test("schema-5 onedir manifest validation and reuse reject provenance drift", ()
   );
 });
 
-test("Linux release manifests require bundled and fingerprinted sidecar setup scripts", () => {
+test("Linux release manifests require bundled and fingerprinted sidecar setup assets", () => {
   const manifest = validManifest({ platform: "linux" });
   assert.deepEqual(validateReleaseManifest(manifest), []);
 
-  for (const entryPoint of REQUIRED_LINUX_SETUP_SCRIPTS) {
+  for (const entryPoint of REQUIRED_LINUX_SETUP_FILES) {
     const withoutBundleEntry = {
       ...manifest,
       bundleEntries: manifest.bundleEntries.filter((entry) => entry.path !== entryPoint),
@@ -601,10 +601,10 @@ test("onedir reuse verifies every staged backend entry", async () => {
       await fsp.writeFile(absoluteEvidencePath, "runtime hf\n", "utf8");
     }
     if (process.platform === "linux") {
-      for (const entryPoint of REQUIRED_LINUX_SETUP_SCRIPTS) {
+      for (const entryPoint of REQUIRED_LINUX_SETUP_FILES) {
         const absoluteScriptPath = path.join(tempDir, ...entryPoint.split("/"));
         await fsp.mkdir(path.dirname(absoluteScriptPath), { recursive: true });
-        await fsp.writeFile(absoluteScriptPath, "#!/usr/bin/env bash\n", "utf8");
+        await fsp.writeFile(absoluteScriptPath, entryPoint.endsWith(".sh") ? "#!/usr/bin/env bash\n" : "pin\n", "utf8");
       }
     }
     const bundleEntries = await collectBundleEntries(tempDir);
@@ -926,8 +926,8 @@ test("desktop packaging stages and requires pinned FFmpeg plus FFprobe on Window
 
 test("Linux backend bundle build copies the frozen setup sidecars", () => {
   const prepareBundle = fs.readFileSync(path.join(studioRoot, "scripts", "prepare-release-bundle.mjs"), "utf8");
-  assert.match(prepareBundle, /REQUIRED_LINUX_SETUP_SCRIPTS/);
-  for (const entryPoint of REQUIRED_LINUX_SETUP_SCRIPTS) {
+  assert.match(prepareBundle, /REQUIRED_LINUX_SETUP_FILES/);
+  for (const entryPoint of REQUIRED_LINUX_SETUP_FILES) {
     assert.equal(fs.existsSync(path.join(studioRoot, ...entryPoint.split("/"))), true, entryPoint);
   }
   assert.match(prepareBundle, /fs\.chmodSync\(destinationPath, 0o755\)/);

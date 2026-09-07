@@ -335,6 +335,20 @@ The helper defaults to:
 the AnimateDiff v1.5 motion module. Some Stability AI downloads may require
 accepting the Hugging Face license and setting `HF_TOKEN`.
 
+Both Linux sidecar helpers now fail closed on mutable inputs:
+
+- `setup_linux_ollama.sh` installs only checksum-pinned Ollama release archives
+  and tracks only its own recorded server PID.
+- `setup_linux_comfyui.sh` installs checksum-pinned source archives for ComfyUI
+  and the reviewed custom nodes, then uses checked-in pinned requirement files
+  instead of executing upstream `install.py` or live `requirements.txt`.
+- Intentional upgrades must provide the corresponding override pair
+  (`OLLAMA_VERSION` + `OLLAMA_ARCHIVE_SHA256`, or the relevant
+  `COMFYUI*_COMMIT` + `COMFYUI*_ARCHIVE_SHA256`).
+- `COMFY_INSTALL_MODELS=1` requires explicit checksum verification for every
+  model asset before publish; the gated SVD XT asset therefore also requires an
+  explicit `COMFY_SVD_MODEL_SHA256` value when you enable that download.
+
 Restart the backend with ComfyUI enabled:
 
 ```bash
@@ -377,6 +391,9 @@ The helper defaults to:
 - model: `nemotron-3-ultra:cloud`
 - model store: `$EDMG_STUDIO_HOME/models/ollama`
 - env file: `$EDMG_STUDIO_HOME/ollama.env`
+
+Intentional Ollama upgrades require the matching `OLLAMA_VERSION` plus
+`OLLAMA_ARCHIVE_SHA256` override pair (and optionally `OLLAMA_ARCHIVE_URL`).
 
 Restart the backend with Ollama enabled:
 

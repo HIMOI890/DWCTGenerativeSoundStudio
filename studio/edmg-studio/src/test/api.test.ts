@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ApiError,
   apiGet,
   apiFetch,
   buildProjectFileUrl,
   ensureBrowserBridge,
   getBackendUrl,
   getBackendUrlAsync,
+  isProjectRevisionConflict,
   isRequestAbortError,
+  issueProjectMediaUrls,
   setBackendAuthTokenForSession,
 } from "../components/api";
 
@@ -165,5 +168,59 @@ describe("backend URL resolution", () => {
     expect(() => buildProjectFileUrl("javascript:alert(1)", "project_01", "outputs/video.mp4")).toThrow(
       "valid HTTP(S) backend URL",
     );
+  });
+
+  it("issues authenticated media URLs through the canonical batch endpoint", async () => {
+    window.__EDMG_BACKEND_URL__ = FRESH_TUNNEL;
+    setBackendAuthTokenForSession("signed-media-token");
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      expires_at: 2_000_000_000,
+      urls: [
+        { purpose: "audio", url: "/signed/audio?token=one" },
+        { purpose: "preview", url: `${FRESH_TUNNEL}/signed/frame?token=two` },
+      ],
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await issueProjectMediaUrls("project_01", [
+      { purpose: "audio", path: "song.wav" },
+      { purpose: "preview", query: { t: 1.5, w: 768, h: 432 } },
+    ]);
+
+    expect(result.urls.map((item) => item.url)).toEqual([
+      `${FRESH_TUNNEL}/signed/audio?token=one`,
+      `${FRESH_TUNNEL}/signed/frame?token=two`,
+    ]);
+    const [target, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(target).toBe(`${FRESH_TUNNEL}/v1/projects/project_01/media-urls`);
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer signed-media-token");
+    expect(JSON.parse(String(init.body))).toEqual({
+      requests: [
+        { purpose: "audio", path: "song.wav" },
+        { purpose: "preview", query: { t: 1.5, w: 768, h: 432 } },
+      ],
+    });
+  });
+
+  it("exposes structured revision conflicts", async () => {
+    window.__EDMG_BACKEND_URL__ = FRESH_TUNNEL;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      error: {
+        code: "stale_project_revision",
+        message: "Project changed in another window",
+        expected_revision: 7,
+        actual_revision: 8,
+      },
+    }), { status: 409, headers: { "Content-Type": "application/json" } })));
+
+    const error = await apiGet("/v1/projects/project_01").catch((caught) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 409,
+      code: "stale_project_revision",
+      expectedRevision: 7,
+      actualRevision: 8,
+    });
+    expect(isProjectRevisionConflict(error)).toBe(true);
   });
 });

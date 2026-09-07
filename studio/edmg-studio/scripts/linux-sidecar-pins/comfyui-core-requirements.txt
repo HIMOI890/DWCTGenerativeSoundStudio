@@ -1,0 +1,15 @@
+# Direct ComfyUI packages not already supplied by the EDMG locked backend profile.
+# Source: ComfyUI requirements.txt at commit 31dfbd4ca0cb36ab6a573fc13daec8cc3a2e1e98.
+blake3==1.0.9
+comfy-aimdo==0.4.15
+comfy-angle==0.1.1
+comfy-kitchen==0.2.31
+comfyui-embedded-docs==0.5.10
+comfyui-frontend-package==1.51.9
+comfyui-workflow-templates==0.11.54
+kornia==0.8.3
+pydantic-settings==2.15.0
+PyOpenGL==3.1.10
+simpleeval==1.0.7
+spandrel==0.4.2
+torchsde==0.2.6

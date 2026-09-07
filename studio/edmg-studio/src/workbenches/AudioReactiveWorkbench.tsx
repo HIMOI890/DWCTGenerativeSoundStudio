@@ -14,8 +14,9 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react';
-import { apiFetch } from '../components/api';
+import type { SignedProjectMediaRequest } from '../components/api';
 import { ProgressBar } from '../components/ProgressBar';
+import { usePreservedMediaSource, useSignedProjectMedia } from '../hooks/useSignedProjectMedia';
 
 type MappingPreset = 'cinematic' | 'psychedelic' | 'ambient' | 'percussive';
 type RenderMode = 'smooth' | 'cut-heavy' | 'performance-led' | 'ambient';
@@ -561,6 +562,19 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
   const animationRef = useRef<number | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const historyRef = useRef<Keyframe[]>([]);
+  const studioAudioName = String(studioProject?.meta?.audio?.filename || '').trim();
+  const studioAudioRequest = useMemo<SignedProjectMediaRequest | null>(
+    () => studioProjectId && studioAudioName
+      ? { purpose: 'audio', path: studioAudioName }
+      : null,
+    [studioAudioName, studioProjectId],
+  );
+  const signedAudio = useSignedProjectMedia(
+    studioProjectId || '',
+    studioAudioRequest ? [studioAudioRequest] : [],
+  );
+  const playbackUrl = audioUrl || signedAudio.urlFor(studioAudioRequest);
+  usePreservedMediaSource(audioRef, playbackUrl);
 
   const addToLog = useCallback((message: string) => {
     setGenerationLog((previous) => [...previous, `${new Date().toLocaleTimeString()}: ${message}`].slice(-16));
@@ -583,7 +597,6 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
 
   useEffect(() => {
     let cancelled = false;
-    const studioAudioName = String(studioProject?.meta?.audio?.filename || '');
     const hydrationKey = [
       studioProjectId || '',
       studioSelectedVariant,
@@ -593,6 +606,11 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
     ].join(':');
     if (!studioProjectId || !studioProject || hydrationKey === studioHydrationKeyRef.current) return;
     studioHydrationKeyRef.current = hydrationKey;
+    setAudioFile(null);
+    setAudioUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return null;
+    });
 
     const hydrate = async () => {
       const savedReactive = studioProject?.meta?.last_reactive_lab || {};
@@ -629,33 +647,13 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
         );
       }
 
-      if (!studioAudioName) return;
-      try {
-        const response = await apiFetch(`/v1/projects/${studioProjectId}/audio`);
-        if (!response.ok || typeof (response as Response & { blob?: () => Promise<Blob> }).blob !== 'function') return;
-        const blob = await response.blob();
-        if (cancelled) return;
-        const nextUrl = URL.createObjectURL(blob);
-        const nextFile = new File([blob], studioAudioName, { type: blob.type || 'audio/*' });
-        setAudioFile(nextFile);
-        setAudioUrl((current) => {
-          if (current) URL.revokeObjectURL(current);
-          return nextUrl;
-        });
-      } catch {
-        if (!cancelled) {
-          setStudioSeedStatus(
-            `Reactive metadata was hydrated from ${studioProjectName || 'the shared Studio project'}, but the project audio could not be reloaded automatically. Choose a local file if you want playback or a fresh deterministic keyframe pass.`,
-          );
-        }
-      }
     };
 
     void hydrate();
     return () => {
       cancelled = true;
     };
-  }, [studioProject, studioProjectId, studioProjectName, studioSelectedVariant]);
+  }, [studioAudioName, studioProject, studioProjectId, studioProjectName, studioSelectedVariant]);
 
   const buildStudioPayload = (): ReactiveLabSyncPayload | null => {
     if (!activeKeyframes.length) return null;
@@ -849,7 +847,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
   };
 
   const togglePlayback = async (): Promise<void> => {
-    if (!audioRef.current || !audioFile) return;
+    if (!audioRef.current || !playbackUrl) return;
     if (isPlaying) {
       audioRef.current.pause();
       setIsPlaying(false);
@@ -874,7 +872,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
     setSectionApproval({});
     await audioRef.current.play();
     setIsPlaying(true);
-    addToLog(`Playback started for ${audioFile.name}`);
+    addToLog(`Playback started for ${audioFile?.name || studioAudioName || 'project audio'}`);
   };
 
   const buildOfflineBundle = async (): Promise<void> => {
@@ -1049,7 +1047,7 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
 
   return (
     <div className={rootClassName}>
-      <audio ref={audioRef} src={audioUrl ?? undefined} onEnded={() => setIsPlaying(false)} hidden />
+      <audio ref={audioRef} crossOrigin="anonymous" onEnded={() => setIsPlaying(false)} hidden />
       <div className={frameClassName}>
         <section className={introCardClassName}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -1110,10 +1108,10 @@ const AudioReactiveGenerator: React.FC<AudioReactiveWorkbenchProps> = ({
               <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                 <div className="mb-3 flex items-center gap-2 font-semibold"><Upload size={18} />Audio file</div>
                 <label className="block"><input type="file" accept="audio/*" className="hidden" onChange={(event) => void handleFileUpload(event)} /><div className="cursor-pointer rounded-xl bg-indigo-500/90 px-4 py-3 text-center font-medium">Choose audio file</div></label>
-                {audioFile ? <div className="mt-3 truncate text-sm text-slate-300">{audioFile.name}</div> : null}
+                {audioFile || studioAudioName ? <div className="mt-3 truncate text-sm text-slate-300">{audioFile?.name || studioAudioName}</div> : null}
                 <div className="mt-3 flex gap-2">
-                  <button onClick={() => void togglePlayback()} disabled={!audioFile} className="flex-1 rounded-xl border border-white/15 px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50">{isPlaying ? <><Pause className="mr-2 inline" size={16} />Pause</> : <><Play className="mr-2 inline" size={16} />Play</>}</button>
-                  <button onClick={() => { if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; setIsPlaying(false); } }} disabled={!audioFile} className="rounded-xl border border-white/15 px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"><Square size={16} /></button>
+                  <button onClick={() => void togglePlayback()} disabled={!playbackUrl} className="flex-1 rounded-xl border border-white/15 px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50">{isPlaying ? <><Pause className="mr-2 inline" size={16} />Pause</> : <><Play className="mr-2 inline" size={16} />Play</>}</button>
+                  <button onClick={() => { if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; setIsPlaying(false); } }} disabled={!playbackUrl} className="rounded-xl border border-white/15 px-4 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50"><Square size={16} /></button>
                 </div>
               </div>
               <div className="rounded-2xl border border-white/10 bg-black/20 p-4">

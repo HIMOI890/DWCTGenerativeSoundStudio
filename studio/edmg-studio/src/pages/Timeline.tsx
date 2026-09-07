@@ -18,11 +18,26 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { apiFetch, apiGet, apiPost, buildProjectFileUrl, getBackendUrl } from "../components/api";
+import {
+  apiFetch,
+  apiGet,
+  apiPost,
+  getBackendUrl,
+  isProjectRevisionConflict,
+  type ApiError,
+  type SignedProjectMediaRequest,
+} from "../components/api";
 import { hasProjectId, resolveProjectId } from "../components/projectSelection";
 import { ProgressBar } from "../components/ProgressBar";
+import {
+  ProjectRevisionConflict,
+  expectedRevisionBody,
+  projectRevision,
+  projectRevisionFromResponse,
+} from "../components/ProjectRevisionConflict";
 import { useOperationProgress } from "../components/useOperationProgress";
 import { useStudioSession } from "../components/studioSession";
+import { usePreservedMediaSource, useSignedProjectMedia } from "../hooks/useSignedProjectMedia";
 import { useTimelineHistory } from "../shared/commands/useTimelineHistory";
 import type { PageProps } from "../types/pageProps";
 
@@ -630,25 +645,19 @@ function ensureTimelineShape(timeline: AnyDict, planVariant: AnyDict | null): An
   return tl;
 }
 
-async function fetchAudioPeaks(audioUrl: string, targetPoints: number): Promise<number[]> {
-  const res = await apiFetch(audioUrl);
-  if (!res.ok) return [];
-  const buf = await res.arrayBuffer();
-  const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
-  const ctx = new AudioCtx();
-  const audio = await ctx.decodeAudioData(buf.slice(0));
-  const ch = audio.getChannelData(0);
-  const step = Math.max(1, Math.floor(ch.length / targetPoints));
-  const peaks: number[] = [];
-  for (let i = 0; i < ch.length; i += step) {
-    let m = 0;
-    for (let j = 0; j < step && i + j < ch.length; j++) m = Math.max(m, Math.abs(ch[i + j]));
-    peaks.push(m);
-  }
-  try {
-    ctx.close();
-  } catch {}
-  return peaks;
+function projectAudioPeaks(project: AnyDict | null): number[] {
+  const analysis = project?.meta?.analysis || {};
+  const candidates = [
+    analysis.waveform,
+    analysis.features?.waveform,
+    analysis.features?.energy_curve,
+    project?.meta?.last_reactive_lab?.waveform,
+  ];
+  const waveform = candidates.find((value) => Array.isArray(value)) as unknown[] | undefined;
+  if (!waveform?.length) return [];
+  const values = waveform.map(Number).filter(Number.isFinite);
+  const maximum = Math.max(1, ...values.map((value) => Math.abs(value)));
+  return values.map((value) => clamp(Math.abs(value) / maximum, 0, 1));
 }
 
 function fmtLabel(trackType: string, clip: Clip): string {
@@ -693,6 +702,8 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const timelineRef = useRef<AnyDict>(timeline);
+  const projectRevisionRef = useRef<number | null>(null);
+  const [revisionConflict, setRevisionConflict] = useState<ApiError | null>(null);
 
   const [durationS, setDurationS] = useState<number>(60);
   const [pxPerSecond, setPxPerSecond] = useState<number>(80);
@@ -711,7 +722,6 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   const [selected, setSelected] = useState<Selected>(null);
 
-  const [audioUrl, setAudioUrl] = useState<string>("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [masterVolume, setMasterVolume] = useState(0.85);
   const [masterMuted, setMasterMuted] = useState(false);
@@ -721,7 +731,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const [peaks, setPeaks] = useState<number[]>([]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const [previewUrl, setPreviewUrl] = useState<string>("");
+  const [previewQuery, setPreviewQuery] = useState<Record<string, unknown> | null>(null);
   const previewTimer = useRef<any>(null);
   const autoFitKeyRef = useRef<string>("");
 
@@ -761,6 +771,49 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   const { progress, runOperation } = useOperationProgress();
   const timelineHistory = useTimelineHistory();
   const projectId = projectsReady && hasProjectId(projects, sessionProjectId) ? sessionProjectId : "";
+  const selectedTimelineTrack = selected?.kind === "track"
+    ? (Array.isArray(timeline?.tracks) ? timeline.tracks : [])[selected.trackIdx]
+    : null;
+  const selectedTimelineClip = selected?.kind === "track"
+    ? selectedTimelineTrack?.clips?.[selected.clipIdx]
+    : null;
+  const activeTimelineVideoPath = selectedTimelineTrack
+    && String(selectedTimelineTrack.type || "").toLowerCase() === "video"
+    ? String(selectedTimelineClip?.data?.source_path || "")
+    : selectedMediaPath;
+  const audioPath = String(project?.meta?.audio?.filename || "").trim();
+  const audioRequest: SignedProjectMediaRequest | null = audioPath
+    ? { purpose: "audio", path: audioPath }
+    : null;
+  const previewRequest: SignedProjectMediaRequest | null = previewQuery
+    ? { purpose: "preview", query: previewQuery }
+    : null;
+  const activeVideoRequest: SignedProjectMediaRequest | null = activeTimelineVideoPath
+    ? { purpose: "file", path: activeTimelineVideoPath }
+    : null;
+  const signedMediaRequests = [audioRequest, previewRequest, activeVideoRequest]
+    .filter((request): request is SignedProjectMediaRequest => request != null);
+  const signedMedia = useSignedProjectMedia(projectId, signedMediaRequests, backendUrl);
+  const audioUrl = signedMedia.urlFor(audioRequest);
+  const previewUrl = signedMedia.urlFor(previewRequest);
+  const activeTimelineVideoUrl = signedMedia.urlFor(activeVideoRequest);
+  const activeVideoRef = useRef<HTMLVideoElement | null>(null);
+  usePreservedMediaSource(audioRef, audioUrl);
+  usePreservedMediaSource(activeVideoRef, activeTimelineVideoUrl);
+
+  const withExpectedRevision = <T extends AnyDict,>(body: T): T & { expected_revision?: number } =>
+    expectedRevisionBody(body, { revision: projectRevisionRef.current });
+
+  const setRevisionFromResponse = (response: unknown) => {
+    const revision = projectRevisionFromResponse(response);
+    if (revision == null) return;
+    projectRevisionRef.current = revision;
+    setProject((current: AnyDict | null) => current ? { ...current, revision } : current);
+  };
+
+  const reportMutationError = (error: unknown) => {
+    if (isProjectRevisionConflict(error)) setRevisionConflict(error);
+  };
 
   const replaceTimelineState = (next: AnyDict, dirty: boolean) => {
     timelineRef.current = next;
@@ -791,10 +844,11 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     const nextProjectId = resolveProjectId(nextProjects, sessionProjectId);
     if (nextProjectId !== sessionProjectId) setProjectId(nextProjectId);
     if (!nextProjectId) {
+      projectRevisionRef.current = null;
+      setRevisionConflict(null);
       setProject(null);
       setPlan(null);
       replaceTimelineState(ensureTimelineShape({}, null), false);
-      setAudioUrl("");
     }
   };
 
@@ -831,8 +885,11 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   };
 
   const refreshProject = async (pid: string) => {
-    const d = await apiGet(`/v1/projects/${pid}`);
-    setProject(d?.project || null);
+    const d = await apiGet(`/v1/projects/${encodeURIComponent(pid)}`);
+    const loadedProject = d?.project || null;
+    projectRevisionRef.current = projectRevision(loadedProject);
+    setRevisionConflict(null);
+    setProject(loadedProject);
     const p = d?.project || {};
     if (editOutputProjectRef.current !== pid) {
       editOutputProjectRef.current = pid;
@@ -851,10 +908,6 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       p?.meta?.audio?.duration_s || p?.meta?.analysis?.features?.duration_s || p?.duration_s || 60,
     );
     setDurationS(Number.isFinite(dur) && dur > 0 ? dur : 60);
-
-    const audioFn = p?.meta?.audio?.filename;
-    if (audioFn) setAudioUrl(`${backendUrl}/v1/projects/${pid}/audio?v=${Date.now()}`);
-    else setAudioUrl("");
 
     setPlan(p?.meta?.last_plan || null);
     setConductorPlan(
@@ -881,27 +934,22 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
 
   useEffect(() => {
     refreshProjects().catch(() => {});
-  }, []);
+  }, [backendUrl]);
   useEffect(() => {
     if (!projectsReady) return;
     if (projectId) refreshProject(projectId).catch(() => {});
     else {
+      projectRevisionRef.current = null;
+      setRevisionConflict(null);
       setProject(null);
       setPlan(null);
       replaceTimelineState(ensureTimelineShape({}, null), false);
-      setAudioUrl("");
     }
-  }, [projectId, projectsReady, selectedVariant]);
+  }, [backendUrl, projectId, projectsReady, selectedVariant]);
 
   useEffect(() => {
-    if (!audioUrl) {
-      setPeaks([]);
-      return;
-    }
-    fetchAudioPeaks(audioUrl, 800)
-      .then(setPeaks)
-      .catch(() => setPeaks([]));
-  }, [audioUrl]);
+    setPeaks(projectAudioPeaks(project));
+  }, [project]);
 
   useEffect(() => {
     setIsPlaying(false);
@@ -911,13 +959,19 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     setLockedLaneIds([]);
   }, [projectId]);
 
+  useEffect(() => () => {
+    if (diffUrl.startsWith("blob:")) URL.revokeObjectURL(diffUrl);
+  }, [diffUrl]);
+
   useEffect(() => {
     if (!projectId || !timelineDirty) return;
     const timer = window.setTimeout(() => {
-      apiPost(`/v1/projects/${projectId}/autosave`, {
+      apiPost(`/v1/projects/${encodeURIComponent(projectId)}/autosave`, withExpectedRevision({
         timeline,
         reason: "timeline_dirty",
-      }).catch(() => {});
+      }))
+        .then(setRevisionFromResponse)
+        .catch(reportMutationError);
     }, 1500);
     return () => window.clearTimeout(timer);
   }, [projectId, timeline, timelineDirty]);
@@ -995,9 +1049,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     if (isPlaying) return;
     if (previewTimer.current) clearTimeout(previewTimer.current);
     previewTimer.current = setTimeout(() => {
-      setPreviewUrl(
-        `${backendUrl}/v1/projects/${projectId}/preview/frame?t=${encodeURIComponent(String(playheadS))}&w=768&h=432&v=${Date.now()}`,
-      );
+      setPreviewQuery({ t: playheadS, w: 768, h: 432 });
     }, 60);
     return () => {
       if (previewTimer.current) clearTimeout(previewTimer.current);
@@ -1421,10 +1473,15 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           detail: "Persisting arrangement edits for the active session.",
           successDetail: "Timeline saved.",
         },
-        () => apiPost(`/v1/projects/${projectId}/timeline`, { timeline }),
+        () => apiPost(
+          `/v1/projects/${encodeURIComponent(projectId)}/timeline`,
+          withExpectedRevision({ timeline }),
+        ),
       );
+      setRevisionFromResponse(saved);
       replaceTimelineState(saved?.timeline || timelineRef.current, false);
     } catch (e: any) {
+      reportMutationError(e);
       setErr(String(e));
     }
   };
@@ -1434,10 +1491,15 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     setRecoveryBusy(true);
     setErr(null);
     try {
-      await apiPost(`/v1/projects/${projectId}/recovery/apply`, { source: "journal" });
+      const response = await apiPost(
+        `/v1/projects/${encodeURIComponent(projectId)}/recovery/apply`,
+        withExpectedRevision({ source: "journal" }),
+      );
+      setRevisionFromResponse(response);
       setRecoveryNotice(null);
       await refreshProject(projectId);
     } catch (e: any) {
+      reportMutationError(e);
       setErr(String(e));
     } finally {
       setRecoveryBusy(false);
@@ -1449,9 +1511,14 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     setRecoveryBusy(true);
     setErr(null);
     try {
-      await apiPost(`/v1/projects/${projectId}/recovery/discard`, {});
+      const response = await apiPost(
+        `/v1/projects/${encodeURIComponent(projectId)}/recovery/discard`,
+        withExpectedRevision({}),
+      );
+      setRevisionFromResponse(response);
       setRecoveryNotice(null);
     } catch (e: any) {
+      reportMutationError(e);
       setErr(String(e));
     } finally {
       setRecoveryBusy(false);
@@ -1557,11 +1624,16 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
           detail: "Saving arrangement edits and opening the internal renderer.",
           successDetail: "Timeline saved and sent to the internal renderer.",
         },
-        () => apiPost(`/v1/projects/${projectId}/timeline`, { timeline }),
+        () => apiPost(
+          `/v1/projects/${encodeURIComponent(projectId)}/timeline`,
+          withExpectedRevision({ timeline }),
+        ),
       );
+      setRevisionFromResponse(saved);
       replaceTimelineState(saved?.timeline || timelineRef.current, false);
       onNavigate?.("render");
     } catch (e: any) {
+      reportMutationError(e);
       setErr(String(e));
     }
   };
@@ -1648,7 +1720,11 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     setMediaRenderStatus("Saving the edit decision list…");
     setErr(null);
     try {
-      const saved = await apiPost(`/v1/projects/${projectId}/timeline`, { timeline: timelineRef.current });
+      const saved = await apiPost(
+        `/v1/projects/${encodeURIComponent(projectId)}/timeline`,
+        withExpectedRevision({ timeline: timelineRef.current }),
+      );
+      setRevisionFromResponse(saved);
       replaceTimelineState(saved?.timeline || timelineRef.current, false);
       setMediaRenderStatus("Queueing the non-destructive video edit…");
       const renderRequest: AnyDict = {
@@ -1660,13 +1736,18 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         name: editOutputSafeName,
       };
       if (editVideoCodec !== "prores") renderRequest.quality = editQuality;
-      const response = await apiPost(`/v1/projects/${projectId}/timeline/render`, renderRequest);
+      const response = await apiPost(
+        `/v1/projects/${encodeURIComponent(projectId)}/timeline/render`,
+        withExpectedRevision(renderRequest),
+      );
+      setRevisionFromResponse(response);
       setMediaRenderStatus(
         response?.job?.id
           ? `Edit queued as ${response.job.id}. Track progress in Render Queue.`
           : "Edit queued. Track progress in Render Queue.",
       );
     } catch (error: any) {
+      reportMutationError(error);
       setErr(String(error));
       setMediaRenderStatus("");
     } finally {
@@ -2092,20 +2173,32 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
     }
   };
 
-  const generateDiffusionPreview = () => {
+  const generateDiffusionPreview = async () => {
     if (!projectId) return;
     const s = clamp(Number(diffStart), 0, durationS);
     const e = clamp(Number(diffEnd), s + 0.05, durationS);
     setDiffBusy(true);
-    setDiffUrl(
-      `${backendUrl}/v1/projects/${projectId}/preview/diffusion_segment?start_s=${encodeURIComponent(String(s))}&end_s=${encodeURIComponent(String(e))}` +
+    setErr(null);
+    try {
+      const path =
+        `/v1/projects/${projectId}/preview/diffusion_segment?start_s=${encodeURIComponent(String(s))}&end_s=${encodeURIComponent(String(e))}` +
         `&w=${encodeURIComponent(String(diffW))}&h=${encodeURIComponent(String(diffH))}` +
         `&fps=${encodeURIComponent(String(diffFps))}&steps=${encodeURIComponent(String(diffSteps))}` +
         `&cfg=${encodeURIComponent(String(diffCfg))}&strength=${encodeURIComponent(String(diffStrength))}` +
         `&model_id=${encodeURIComponent(String(diffModel))}` +
         `&variant_index=${encodeURIComponent(String(selectedVariant || 0))}` +
-        `&force=1&v=${Date.now()}`,
-    );
+        `&force=1`;
+      const response = await apiFetch(path);
+      if (!response.ok) throw new Error("Could not generate the diffusion preview.");
+      const nextUrl = URL.createObjectURL(await response.blob());
+      setDiffUrl((current) => {
+        if (current.startsWith("blob:")) URL.revokeObjectURL(current);
+        return nextUrl;
+      });
+    } catch (error: any) {
+      setDiffBusy(false);
+      setErr(String(error?.message ?? error));
+    }
   };
 
   const selectedTrackClip = (sel: Selected) => {
@@ -2481,10 +2574,6 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       : { rail: 220, lane: 64, wave: 106, clipTop: 12, clipHeight: 40, keyframeTop: 24 };
   const pickedSelection =
     selected?.kind === "track" ? selectedTrackClip(selected) : null;
-  const activeTimelineVideoPath =
-    pickedSelection && String(pickedSelection.tr.type || "").toLowerCase() === "video"
-      ? String(pickedSelection.cl.data?.source_path || "")
-      : selectedMediaPath;
   const selectionStatus =
     selected?.kind === "track" && pickedSelection
       ? `${pickedSelection.tr.name} clip`
@@ -2867,7 +2956,6 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
       {audioUrl ? (
         <audio
           ref={audioRef}
-          src={audioUrl}
           preload="metadata"
           className="timeline-audioElement"
         />
@@ -3704,7 +3792,7 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
         {activeTimelineVideoPath && projectId ? (
           <video
             key={activeTimelineVideoPath}
-            src={buildProjectFileUrl(backendUrl, projectId, activeTimelineVideoPath)}
+            ref={activeVideoRef}
             controls
             className="timeline-monitorVideo"
             onLoadedMetadata={(event) => {
@@ -4375,6 +4463,14 @@ export default function Timeline({ backendUrl: backendUrlProp, onNavigate }: Pag
   return (
     <div className="timeline-page" onKeyDown={onKeyDown} tabIndex={0}>
       {pageHeader}
+      <ProjectRevisionConflict
+        conflict={revisionConflict}
+        onReload={async () => {
+          if (!projectId) return;
+          setErr(null);
+          await refreshProject(projectId);
+        }}
+      />
       {recoveryNotice ? (
         <div className="card timeline-sessionCard timeline-sessionCard--accent" style={{ marginBottom: 12 }}>
           <div className="timeline-sessionLabel">Crash recovery</div>

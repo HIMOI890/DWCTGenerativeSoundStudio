@@ -3,6 +3,7 @@ import sys
 import json
 import re
 import threading
+import queue
 import subprocess
 import shutil
 import tkinter as tk
@@ -39,6 +40,112 @@ from edmg_studio_backend.uv_toolchain import (  # noqa: E402
     sync_frozen_project,
     uv_version,
 )
+
+
+class UiDispatchDisposedError(RuntimeError):
+    """Raised when work is dispatched after the launcher window is closing."""
+
+
+class _UiDispatchRequest:
+    __slots__ = ("callback", "args", "kwargs", "done", "result", "error")
+
+    def __init__(self, callback, args, kwargs, *, wait: bool):
+        self.callback = callback
+        self.args = args
+        self.kwargs = kwargs
+        self.done = threading.Event() if wait else None
+        self.result = None
+        self.error: Exception | None = None
+
+
+class _TkMainThreadDispatcher:
+    def __init__(self, scheduler, *, poll_ms: int = 25):
+        self._scheduler = scheduler
+        self._poll_ms = max(10, int(poll_ms))
+        self._main_thread_id = threading.get_ident()
+        self._queue: "queue.Queue[_UiDispatchRequest]" = queue.Queue()
+        self._after_id = None
+        self._disposed = False
+
+    def is_ui_thread(self) -> bool:
+        return threading.get_ident() == self._main_thread_id
+
+    def start(self) -> None:
+        if self._disposed or self._after_id is not None:
+            return
+        self._schedule_next()
+
+    def post(self, callback, *args, **kwargs) -> bool:
+        if self._disposed:
+            return False
+        if self.is_ui_thread():
+            callback(*args, **kwargs)
+            return True
+        self._queue.put(_UiDispatchRequest(callback, args, kwargs, wait=False))
+        return True
+
+    def call(self, callback, *args, **kwargs):
+        if self._disposed:
+            raise UiDispatchDisposedError("launcher window is closing")
+        if self.is_ui_thread():
+            return callback(*args, **kwargs)
+        request = _UiDispatchRequest(callback, args, kwargs, wait=True)
+        self._queue.put(request)
+        assert request.done is not None
+        request.done.wait()
+        if request.error is not None:
+            raise request.error
+        return request.result
+
+    def drain_pending(self) -> None:
+        while True:
+            try:
+                request = self._queue.get_nowait()
+            except queue.Empty:
+                return
+            if self._disposed:
+                if request.done is not None:
+                    request.error = UiDispatchDisposedError(
+                        "launcher window is closing"
+                    )
+                    request.done.set()
+                continue
+            try:
+                request.result = request.callback(*request.args, **request.kwargs)
+            except Exception as exc:  # pragma: no cover - bubbled to waiting caller
+                request.error = exc
+            finally:
+                if request.done is not None:
+                    request.done.set()
+
+    def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
+        after_id = self._after_id
+        self._after_id = None
+        if after_id is not None and hasattr(self._scheduler, "after_cancel"):
+            try:
+                self._scheduler.after_cancel(after_id)
+            except Exception:
+                pass
+        self.drain_pending()
+
+    def _pump(self) -> None:
+        self._after_id = None
+        if self._disposed:
+            self.drain_pending()
+            return
+        self.drain_pending()
+        self._schedule_next()
+
+    def _schedule_next(self) -> None:
+        if self._disposed:
+            return
+        try:
+            self._after_id = self._scheduler.after(self._poll_ms, self._pump)
+        except Exception:
+            self.dispose()
 
 # ── Machine optimiser ──────────────────────────────────────────────────────────
 OPTIMIZE_STATE_PATH = STUDIO_DIR / ".optimize_state.json"
@@ -1269,6 +1376,11 @@ class Launcher(tk.Tk):
         self.title("EDMG Studio Launcher")
         self.geometry("920x620")
         self.minsize(920, 620)
+        self._ui_thread_id = threading.get_ident()
+        self._disposed = False
+        self._busy_depth = 0
+        self._busy_widgets: list[ttk.Button] = []
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.backend_proc: subprocess.Popen | None = None
         self.studio_proc: subprocess.Popen | None = None
@@ -1318,6 +1430,85 @@ class Launcher(tk.Tk):
 
     # ---------------- UI / logging ----------------
 
+    def _on_close(self) -> None:
+        self._disposed = True
+        try:
+            if self._studio_log_fp and not self._studio_log_fp.closed:
+                self._studio_log_fp.flush()
+                self._studio_log_fp.close()
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+    def _on_ui_thread(self) -> bool:
+        return threading.get_ident() == self._ui_thread_id
+
+    def _ui_alive(self) -> bool:
+        if self._disposed:
+            return False
+        try:
+            return bool(self.winfo_exists())
+        except Exception:
+            return False
+
+    def _invoke_ui_callback(self, callback, *args, **kwargs) -> None:
+        if not self._ui_alive():
+            return
+        callback(*args, **kwargs)
+
+    def _call_on_ui_thread(self, callback, *args, delay_ms: int = 0, **kwargs) -> bool:
+        if self._disposed:
+            return False
+        if self._on_ui_thread() and delay_ms <= 0:
+            if not self._ui_alive():
+                return False
+            callback(*args, **kwargs)
+            return True
+        try:
+            self.after(delay_ms, lambda: self._invoke_ui_callback(callback, *args, **kwargs))
+            return True
+        except Exception:
+            return False
+
+    def _show_error_dialog(self, title: str, message: str) -> None:
+        def show() -> None:
+            parent = self if self._ui_alive() else None
+            messagebox.showerror(title, message, parent=parent)
+
+        self._call_on_ui_thread(show)
+
+    def _set_busy(self, active: bool) -> None:
+        if not self._on_ui_thread():
+            self._call_on_ui_thread(self._set_busy, active)
+            return
+        if not self._ui_alive():
+            return
+
+        if active:
+            self._busy_depth += 1
+        else:
+            self._busy_depth = max(0, self._busy_depth - 1)
+        busy = self._busy_depth > 0
+
+        try:
+            self.configure(cursor="watch" if busy else "")
+        except Exception:
+            pass
+
+        for button in list(self._busy_widgets):
+            try:
+                if not button.winfo_exists():
+                    continue
+                if busy:
+                    button.state(["disabled"])
+                else:
+                    button.state(["!disabled"])
+            except Exception:
+                pass
+
     def _append_text(self, widget: tk.Text, msg: str, *, max_lines: int, follow: bool = True) -> None:
         msg = str(msg).rstrip("\n")
         if not msg:
@@ -1343,12 +1534,23 @@ class Launcher(tk.Tk):
             print(msg)
 
     def _log(self, msg: str) -> None:
+        if not self._on_ui_thread():
+            self._call_on_ui_thread(self._log, msg)
+            return
+        if not self._ui_alive():
+            print(msg)
+            return
         if not hasattr(self, "txt"):
             print(msg)
             return
         self._append_text(self.txt, str(msg), max_lines=1500, follow=True)
 
     def _log_studio(self, msg: str) -> None:
+        if not self._on_ui_thread():
+            self._call_on_ui_thread(self._log_studio, msg)
+            return
+        if not self._ui_alive():
+            return
         if not hasattr(self, "txt_studio"):
             return
         follow = True
@@ -1359,6 +1561,11 @@ class Launcher(tk.Tk):
         self._append_text(self.txt_studio, str(msg), max_lines=2500, follow=follow)
 
     def _clear_studio_log_view(self) -> None:
+        if not self._on_ui_thread():
+            self._call_on_ui_thread(self._clear_studio_log_view)
+            return
+        if not self._ui_alive():
+            return
         try:
             self.txt_studio.configure(state="normal")
             self.txt_studio.delete("1.0", "end")
@@ -1378,6 +1585,8 @@ class Launcher(tk.Tk):
         except Exception as e:
             self._log(f"Could not open log file: {e}")
     def _run_bg(self, title: str, fn) -> None:
+        self._set_busy(True)
+
         def runner():
             try:
                 self._log(f"== {title} ==")
@@ -1386,7 +1595,7 @@ class Launcher(tk.Tk):
             except Exception as e:
                 self._log(f"!! {title} failed: {e}")
                 try:
-                    messagebox.showerror("Error", f"{title} failed:\n{e}")
+                    self._show_error_dialog("Error", f"{title} failed:\n{e}")
                 except Exception:
                     pass
             finally:
@@ -1394,6 +1603,7 @@ class Launcher(tk.Tk):
                     self._refresh_status()
                 except Exception:
                     pass
+                self._set_busy(False)
 
         threading.Thread(target=runner, daemon=True).start()
 
@@ -1600,6 +1810,17 @@ class Launcher(tk.Tk):
         self.txt_studio.configure(state="disabled")
 
         ttk.Button(frm, text="Refresh status", command=self._refresh_status).pack(anchor="e", pady=(8, 0))
+        self._busy_widgets = [widget for widget in self.winfo_children_recursive() if isinstance(widget, ttk.Button)]
+
+    def winfo_children_recursive(self):
+        stack = list(self.winfo_children())
+        while stack:
+            child = stack.pop(0)
+            yield child
+            try:
+                stack.extend(child.winfo_children())
+            except Exception:
+                continue
 
     # ---------------- backend host/port persistence ----------------
 
@@ -1608,8 +1829,6 @@ class Launcher(tk.Tk):
         port = int(port)
         self.backend_host = host
         self.backend_port = port
-        self.var_backend_host.set(host)
-        self.var_backend_port.set(str(port))
 
         os.environ["EDMG_STUDIO_BACKEND_HOST"] = host
         os.environ["EDMG_STUDIO_BACKEND_PORT"] = str(port)
@@ -1622,6 +1841,15 @@ class Launcher(tk.Tk):
         cfg.update(_default_storage_env(self.studio_home, self.data_dir))
         _write_json(LAUNCHER_ENV_PATH, cfg)
 
+        self._call_on_ui_thread(self._apply_backend_host_port_ui, host, port, reason)
+
+    def _apply_backend_host_port_ui(self, host: str, port: int, reason: str) -> None:
+        if not self._ui_alive():
+            return
+        if hasattr(self, "var_backend_host"):
+            self.var_backend_host.set(host)
+        if hasattr(self, "var_backend_port"):
+            self.var_backend_port.set(str(port))
         self._log(f"Backend host/port set ({reason}): {host}:{port}")
 
     # ---------------- health / scan / sync ----------------
@@ -1661,6 +1889,8 @@ class Launcher(tk.Tk):
 
 
     def _poll_studio_log(self) -> None:
+        if self._disposed:
+            return
 
 
         parsed = None  # hotfix: avoid UnboundLocalError if log parse fails
@@ -1731,6 +1961,8 @@ class Launcher(tk.Tk):
 
     def _auto_attach_backend_if_found(self) -> None:
         """Attach to an existing backend (scan + studio logs)."""
+        if self._disposed:
+            return
         if self._refresh_in_progress:
             return
 
@@ -1934,6 +2166,11 @@ class Launcher(tk.Tk):
     # ---------------- actions ----------------
 
     def _refresh_status(self) -> None:
+        if not self._on_ui_thread():
+            self._call_on_ui_thread(self._refresh_status)
+            return
+        if not self._ui_alive():
+            return
         if self._refresh_in_progress:
             return
         self._refresh_in_progress = True
@@ -1988,6 +2225,11 @@ class Launcher(tk.Tk):
         return "○ normal"
 
     def _refresh_opt_label(self) -> None:
+        if not self._on_ui_thread():
+            self._call_on_ui_thread(self._refresh_opt_label)
+            return
+        if not self._ui_alive():
+            return
         try:
             self._opt_status_var.set(self._optimize_current_label())
         except Exception:
@@ -2195,72 +2437,72 @@ Get-ChildItem $base | ForEach-Object {
         self._run_bg("Install Studio UI deps", work)
 
     def start_backend(self) -> None:
-        def work():
-            # Attach to an already-running backend on nearby ports (avoid duplicates).
-            found = self._scan_for_running_backend(self.backend_host, DEFAULT_BACKEND_PORT, DEFAULT_BACKEND_PORT + 10)
-            if found:
-                if found != int(self.backend_port):
-                    self._log(f"Found existing backend at {self.backend_host}:{found}; attaching (not starting new).")
-                    self._set_backend_host_port(self.backend_host, found, reason="attach start-backend")
-                else:
-                    self._log("Backend reachable on configured port; not starting a new one.")
-                return
+        self._run_bg("Start backend", self._start_backend_impl)
 
-            if self.backend_proc and self.backend_proc.poll() is None:
-                self._log("Backend already running.")
-                return
+    def _start_backend_impl(self) -> None:
+        # Attach to an already-running backend on nearby ports (avoid duplicates).
+        found = self._scan_for_running_backend(self.backend_host, DEFAULT_BACKEND_PORT, DEFAULT_BACKEND_PORT + 10)
+        if found:
+            if found != int(self.backend_port):
+                self._log(f"Found existing backend at {self.backend_host}:{found}; attaching (not starting new).")
+                self._set_backend_host_port(self.backend_host, found, reason="attach start-backend")
+            else:
+                self._log("Backend reachable on configured port; not starting a new one.")
+            return
 
-            self._ensure_backend_port_available()
+        if self.backend_proc and self.backend_proc.poll() is None:
+            self._log("Backend already running.")
+            return
 
-            profile = active_accelerator_profile()
-            _sync_locked_backend(profile, self._log)
-            cmd, env = frozen_run_command(
-                profile,
-                [
-                    "python",
-                    "-m",
-                    "edmg_studio_backend",
-                    "serve",
-                    "--host",
-                    self.backend_host,
-                    "--port",
-                    str(self.backend_port),
-                ],
-                capability_extras=RUNTIME_CAPABILITY_EXTRAS,
-            )
-            env = _env_with_node_bin_dirs(env)
-            for key, value in _default_storage_env(self.studio_home, self.data_dir).items():
-                env.setdefault(key, value)
-            ffmpeg_path = env.get("EDMG_FFMPEG_PATH") or _resolve_ffmpeg_path()
-            env["EDMG_FFMPEG_PATH"] = ffmpeg_path
-            self._log(f"Using FFmpeg: {ffmpeg_path}")
-            if env.get("EDMG_7Z_PATH"):
-                self._log(f"Using 7-Zip: {env['EDMG_7Z_PATH']}")
-            self._log("Starting backend: " + " ".join(cmd))
-            self.backend_proc = subprocess.Popen(cmd, cwd=str(BACKEND_DIR), env=env)
-            time.sleep(0.25)
+        self._ensure_backend_port_available()
 
-        self._run_bg("Start backend", work)
+        profile = active_accelerator_profile()
+        _sync_locked_backend(profile, self._log)
+        cmd, env = frozen_run_command(
+            profile,
+            [
+                "python",
+                "-m",
+                "edmg_studio_backend",
+                "serve",
+                "--host",
+                self.backend_host,
+                "--port",
+                str(self.backend_port),
+            ],
+            capability_extras=RUNTIME_CAPABILITY_EXTRAS,
+        )
+        env = _env_with_node_bin_dirs(env)
+        for key, value in _default_storage_env(self.studio_home, self.data_dir).items():
+            env.setdefault(key, value)
+        ffmpeg_path = env.get("EDMG_FFMPEG_PATH") or _resolve_ffmpeg_path()
+        env["EDMG_FFMPEG_PATH"] = ffmpeg_path
+        self._log(f"Using FFmpeg: {ffmpeg_path}")
+        if env.get("EDMG_7Z_PATH"):
+            self._log(f"Using 7-Zip: {env['EDMG_7Z_PATH']}")
+        self._log("Starting backend: " + " ".join(cmd))
+        self.backend_proc = subprocess.Popen(cmd, cwd=str(BACKEND_DIR), env=env)
+        time.sleep(0.25)
 
     def stop_backend(self) -> None:
-        def work():
-            if not self.backend_proc or self.backend_proc.poll() is not None:
-                self._log("Backend not running.")
-                return
-            self._log("Stopping backend…")
+        self._run_bg("Stop backend", self._stop_backend_impl)
+
+    def _stop_backend_impl(self) -> None:
+        if not self.backend_proc or self.backend_proc.poll() is not None:
+            self._log("Backend not running.")
+            return
+        self._log("Stopping backend…")
+        try:
+            self.backend_proc.terminate()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        if self.backend_proc and self.backend_proc.poll() is None:
             try:
-                self.backend_proc.terminate()
+                self.backend_proc.kill()
             except Exception:
                 pass
-            time.sleep(0.3)
-            if self.backend_proc and self.backend_proc.poll() is None:
-                try:
-                    self.backend_proc.kill()
-                except Exception:
-                    pass
-            self.backend_proc = None
-
-        self._run_bg("Stop backend", work)
+        self.backend_proc = None
 
     def health_test(self) -> None:
         def work():
@@ -2270,7 +2512,7 @@ Get-ChildItem $base | ForEach-Object {
                 self._log("Health OK: " + h)
             except Exception:
                 self._log("Backend not running; starting it for test.")
-                self.start_backend()
+                self._start_backend_impl()
                 for _ in range(40):
                     try:
                         h = _http_get(url, timeout=1.2)

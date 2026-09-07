@@ -234,6 +234,46 @@ public sealed class MediaPipelineTests
     }
 
     [TestMethod]
+    public async Task PlaybackCreationRejectsOversizedKnownContentLengthBeforeReading()
+    {
+        using var temporaryDirectory = new TemporaryDirectory();
+        using var spoolLimit = new EnvironmentVariableScope("EDMG_STUDIO_VIDEO_SPOOL_MAX_BYTES", "8");
+        var decoder = new FakeVideoDecoder();
+        await using var source = new NonSeekableReadTrackingStream([1, 2, 3, 4]);
+
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(
+            () => VideoPlaybackSession.CreateAsync(
+                source,
+                decoder,
+                temporaryDirectory.Path,
+                knownContentLength: 9,
+                cancellationToken: CancellationToken.None));
+
+        Assert.AreEqual(0, source.ReadCount);
+        Assert.IsEmpty(Directory.GetFiles(temporaryDirectory.Path));
+    }
+
+    [TestMethod]
+    public async Task PlaybackCreationEnforcesConfiguredLimitWhenContentLengthUnderReports()
+    {
+        using var temporaryDirectory = new TemporaryDirectory();
+        using var spoolLimit = new EnvironmentVariableScope("EDMG_STUDIO_VIDEO_SPOOL_MAX_BYTES", "8");
+        var decoder = new FakeVideoDecoder();
+        await using var source = new NonSeekableReadTrackingStream([1, 2, 3, 4, 5, 6, 7, 8, 9], maximumReadSize: 5);
+
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(
+            () => VideoPlaybackSession.CreateAsync(
+                source,
+                decoder,
+                temporaryDirectory.Path,
+                knownContentLength: 4,
+                cancellationToken: CancellationToken.None));
+
+        Assert.IsTrue(source.RequestedBufferSizes.Count >= 2);
+        Assert.IsTrue(source.RequestedBufferSizes.Skip(1).All(size => size <= 4));
+        Assert.IsEmpty(Directory.GetFiles(temporaryDirectory.Path));
+    }
+
     public async Task PlaybackReplacementCancelsPriorDecodeAndDisposalDeletesSpool()
     {
         using var temporaryDirectory = new TemporaryDirectory();
@@ -276,16 +316,20 @@ public sealed class MediaPipelineTests
     private sealed class FakeVideoDecoder(Exception? probeError = null) : IVideoDecoder
     {
         private int decodeCount;
+        private int probeCount;
 
         public TaskCompletionSource FirstDecodeStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int DecodeCount => Volatile.Read(ref decodeCount);
 
+        public int ProbeCount => Volatile.Read(ref probeCount);
+
         public TimeSpan LastStartPosition { get; private set; }
 
         public Task<VideoMetadata> ProbeAsync(string sourcePath, CancellationToken cancellationToken = default)
         {
+            Interlocked.Increment(ref probeCount);
             if (probeError is not null)
             {
                 return Task.FromException<VideoMetadata>(probeError);
@@ -319,6 +363,82 @@ public sealed class MediaPipelineTests
             Memory<byte> buffer,
             CancellationToken cancellationToken = default)
             => base.ReadAsync(buffer[..Math.Min(buffer.Length, maximumReadSize)], cancellationToken);
+    }
+
+    private class NonSeekableReadTrackingStream(byte[] bytes, int? maximumReadSize = null) : Stream
+    {
+        private readonly byte[] _bytes = bytes;
+        private readonly int? _maximumReadSize = maximumReadSize;
+        private int _offset;
+
+        public int ReadCount { get; private set; }
+
+        public List<int> RequestedBufferSizes { get; } = [];
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => _bytes.Length;
+        public override long Position
+        {
+            get => _offset;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => throw new NotSupportedException();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RequestedBufferSizes.Add(buffer.Length);
+            ReadCount++;
+            if (_offset >= _bytes.Length)
+            {
+                return ValueTask.FromResult(0);
+            }
+
+            int count = Math.Min(_bytes.Length - _offset, _maximumReadSize ?? buffer.Length);
+            _bytes.AsMemory(_offset, count).CopyTo(buffer);
+            _offset += count;
+            return ValueTask.FromResult(count);
+        }
+    }
+
+    private sealed class CancelAfterFirstChunkStream(
+        byte[] bytes,
+        CancellationTokenSource cancellation,
+        int firstChunkLength) : NonSeekableReadTrackingStream(bytes, firstChunkLength)
+    {
+        private readonly CancellationTokenSource _cancellation = cancellation;
+        private bool _canceled;
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            ValueTask<int> pending = base.ReadAsync(buffer, cancellationToken);
+            int read = pending.IsCompletedSuccessfully ? pending.Result : pending.AsTask().GetAwaiter().GetResult();
+            if (read > 0 && !_canceled)
+            {
+                _canceled = true;
+                _cancellation.Cancel();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(read);
+        }
     }
 
     private sealed class EnvironmentVariableScope : IDisposable

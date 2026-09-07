@@ -5,5 +5,8 @@
   <Folder Name="/tests/">
     <Project Path="tests/EdmgStudio.Core.Tests/EdmgStudio.Core.Tests.csproj" />
   </Folder>
-  <Project Path="EdmgStudio.WinUI.csproj" />
+  <Project Path="EdmgStudio.WinUI.csproj">
+    <Platform Solution="Debug|*" Project="x64" />
+    <Deploy Solution="Debug|*" />
+  </Project>
 </Solution>

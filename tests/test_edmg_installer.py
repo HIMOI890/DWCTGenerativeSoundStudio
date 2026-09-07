@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -61,14 +62,26 @@ def test_install_uses_pinned_uv_for_venv_targets(
     module = _load_module()
     uv_bin = tmp_path / "toolchain" / "uv"
     venv_dir = tmp_path / "standalone-env"
+    resolved_python = tmp_path / "managed-python" / expected_python_suffix
     requirements = tmp_path / "requirements-minimal.txt"
     requirements.write_text("requests>=2\n", encoding="utf-8")
     commands: list[list[str]] = []
+    validated: list[tuple[Path, str]] = []
 
     monkeypatch.setattr(module, "_is_windows", lambda: windows_style)
     monkeypatch.setattr(module, "_resolve_uv", lambda env=None: uv_bin)
     monkeypatch.setattr(module, "_select_requirements", lambda _mode: requirements)
     monkeypatch.setattr(module, "_post_install", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "_resolve_requested_python",
+        lambda uv, request, *, env=None: resolved_python,
+    )
+    monkeypatch.setattr(
+        module,
+        "_validate_python_request",
+        lambda py, request, *, env=None: validated.append((py, request)),
+    )
     monkeypatch.setattr(
         module,
         "_run",
@@ -79,6 +92,7 @@ def test_install_uses_pinned_uv_for_venv_targets(
         mode="minimal",
         backend="cpu",
         venv=str(venv_dir),
+        python=None,
         cache_root=str(tmp_path / "cache"),
         skip_torch=True,
         skip_corpora=True,
@@ -91,12 +105,11 @@ def test_install_uses_pinned_uv_for_venv_targets(
         str(uv_bin),
         "venv",
         "--python",
-        "3.12",
+        str(resolved_python),
         "--seed",
         str(venv_dir),
     ]
-    installed_python = commands[1][4].replace("\\", "/")
-    assert installed_python.endswith(expected_python_suffix)
+    assert validated == [(module._venv_python(venv_dir), "3.12")]
     assert commands[1] == [
         str(uv_bin),
         "pip",
@@ -130,6 +143,9 @@ def test_install_uses_current_python_when_venv_is_disabled(
     monkeypatch.setattr(module, "_select_requirements", lambda _mode: requirements)
     monkeypatch.setattr(module, "_post_install", lambda *args, **kwargs: None)
     monkeypatch.setattr(
+        module, "_validate_python_request", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
         module,
         "_run",
         lambda cmd, *, cwd=None, env=None: commands.append(list(cmd)) or 0,
@@ -139,6 +155,7 @@ def test_install_uses_current_python_when_venv_is_disabled(
         mode="standard",
         backend="cpu",
         venv=None,
+        python=None,
         cache_root=None,
         skip_torch=True,
         skip_corpora=True,
@@ -166,6 +183,235 @@ def test_install_uses_current_python_when_venv_is_disabled(
             "-e",
             ".",
         ],
+    ]
+
+
+def test_install_uses_requested_python_when_venv_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_module()
+    uv_bin = tmp_path / "toolchain" / "uv"
+    requested_python = "3.12"
+    resolved_python = tmp_path / "managed python" / "python.exe"
+    requirements = tmp_path / "requirements-standard.txt"
+    requirements.write_text("requests>=2\n", encoding="utf-8")
+    commands: list[list[str]] = []
+    post_install_python: list[Path] = []
+    validated: list[tuple[Path, str]] = []
+    requests: list[str] = []
+
+    monkeypatch.setattr(module, "_resolve_uv", lambda env=None: uv_bin)
+    monkeypatch.setattr(module, "_select_requirements", lambda _mode: requirements)
+    monkeypatch.setattr(
+        module,
+        "_resolve_requested_python",
+        lambda uv, request, *, env=None: requests.append(request) or resolved_python,
+    )
+    monkeypatch.setattr(
+        module,
+        "_validate_python_request",
+        lambda py, request, *, env=None: validated.append((py, request)),
+    )
+    monkeypatch.setattr(
+        module,
+        "_post_install",
+        lambda py, **kwargs: post_install_python.append(py),
+    )
+    monkeypatch.setattr(
+        module,
+        "_run",
+        lambda cmd, *, cwd=None, env=None: commands.append(list(cmd)) or 0,
+    )
+
+    rc = module.install(
+        mode="standard",
+        backend="cpu",
+        venv=None,
+        python=requested_python,
+        cache_root=None,
+        skip_torch=True,
+        skip_corpora=True,
+        skip_models=True,
+        skip_whisper=True,
+    )
+
+    assert rc == 0
+    assert requests == [requested_python]
+    assert validated == [(resolved_python, requested_python)]
+    assert post_install_python == [resolved_python]
+    assert commands == [
+        [
+            str(uv_bin),
+            "pip",
+            "install",
+            "--python",
+            str(resolved_python),
+            "-r",
+            str(requirements),
+        ],
+        [
+            str(uv_bin),
+            "pip",
+            "install",
+            "--python",
+            str(resolved_python),
+            "-e",
+            ".",
+        ],
+    ]
+    stdout = capsys.readouterr().out
+    assert (
+        f'"{resolved_python}" -m enhanced_deforum_music_generator ui --port 7860'
+        in stdout
+    )
+    assert (
+        "python scripts/edmg_installer.py verify --python "
+        f'"{resolved_python}"'
+        in stdout
+    )
+
+
+def test_install_fails_for_mismatched_requested_python(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module = _load_module()
+    uv_bin = tmp_path / "toolchain" / "uv"
+    venv_dir = tmp_path / "standalone-env"
+
+    monkeypatch.setattr(module, "_resolve_uv", lambda env=None: uv_bin)
+    monkeypatch.setattr(
+        module, "_ensure_venv", lambda *args, **kwargs: module._venv_python(venv_dir)
+    )
+    monkeypatch.setattr(
+        module,
+        "_validate_python_request",
+        lambda py, request, *, env=None: (_ for _ in ()).throw(
+            RuntimeError("Requested Python '3.12' but resolved interpreter is 3.11.9.")
+        ),
+    )
+
+    rc = module.install(
+        mode="standard",
+        backend="cpu",
+        venv=str(venv_dir),
+        python=None,
+        cache_root=None,
+        skip_torch=True,
+        skip_corpora=True,
+        skip_models=True,
+        skip_whisper=True,
+    )
+
+    assert rc == 1
+    assert (
+        "Requested Python '3.12' but resolved interpreter is 3.11.9."
+        in capsys.readouterr().err
+    )
+
+
+def test_verify_uses_requested_venv_python_instead_of_launcher(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = _load_module()
+    venv_dir = tmp_path / "verify-env"
+    venv_python = module._venv_python(venv_dir)
+    venv_python.parent.mkdir(parents=True, exist_ok=True)
+    venv_python.write_text("", encoding="utf-8")
+    commands: list[list[str]] = []
+    validated: list[tuple[Path, str]] = []
+
+    monkeypatch.setattr(
+        module,
+        "_validate_python_request",
+        lambda py, request, *, env=None: validated.append((py, request)),
+    )
+    monkeypatch.setattr(
+        module,
+        "_run",
+        lambda cmd, *, cwd=None, env=None: commands.append(list(cmd)) or 0,
+    )
+
+    rc = module.verify(venv=str(venv_dir), python=None, cache_root=None)
+
+    assert rc == 0
+    assert validated == [(venv_python, "3.12")]
+    assert [command[0] for command in commands] == [str(venv_python), str(venv_python)]
+
+
+def test_verify_uses_resolved_requested_python_for_checks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = _load_module()
+    uv_bin = tmp_path / "toolchain" / "uv"
+    resolved_python = tmp_path / "managed-python" / "python.exe"
+    commands: list[list[str]] = []
+    requests: list[str] = []
+
+    monkeypatch.setattr(module, "_resolve_uv", lambda env=None: uv_bin)
+    monkeypatch.setattr(
+        module,
+        "_resolve_requested_python",
+        lambda uv, request, *, env=None: requests.append(request) or resolved_python,
+    )
+    monkeypatch.setattr(
+        module, "_validate_python_request", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        module,
+        "_run",
+        lambda cmd, *, cwd=None, env=None: commands.append(list(cmd)) or 0,
+    )
+
+    rc = module.verify(venv=None, python="3.12", cache_root=None)
+
+    assert rc == 0
+    assert requests == ["3.12"]
+    assert [command[0] for command in commands] == [
+        str(resolved_python),
+        str(resolved_python),
+    ]
+
+
+def test_validate_python_request_rejects_mismatched_versions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = _load_module()
+    py = tmp_path / "python.exe"
+
+    monkeypatch.setattr(module, "_python_version", lambda *args, **kwargs: "3.11.9")
+
+    with pytest.raises(RuntimeError, match="Requested Python '3.12'"):
+        module._validate_python_request(py, "3.12")
+
+
+def test_resolve_requested_python_uses_uv_find(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    module = _load_module()
+    uv_bin = tmp_path / "toolchain" / "uv"
+    resolved_python = tmp_path / "managed-python" / "python.exe"
+    resolved_python.parent.mkdir(parents=True, exist_ok=True)
+    resolved_python.write_text("", encoding="utf-8")
+    captured_commands: list[list[str]] = []
+
+    def fake_run_capture(cmd, *, cwd=None, env=None):
+        captured_commands.append(list(cmd))
+        return subprocess.CompletedProcess(
+            list(cmd),
+            0,
+            stdout=f"{resolved_python}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(module, "_run_capture", fake_run_capture)
+
+    actual = module._resolve_requested_python(uv_bin, "3.12")
+
+    assert actual == resolved_python
+    assert captured_commands == [
+        [str(uv_bin), "python", "find", "--no-project", "3.12"]
     ]
 
 

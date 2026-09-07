@@ -55,6 +55,10 @@ public sealed class PlannerLabImportRequest
 
     [JsonPropertyName("overwrite_timeline")]
     public bool OverwriteTimeline { get; init; } = true;
+
+    [JsonPropertyName("expected_revision")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ExpectedRevision { get; set; }
 }
 
 public sealed class PlannerLabImportResponse

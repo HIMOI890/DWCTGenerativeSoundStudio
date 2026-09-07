@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using EdmgStudio.Core.Models;
+using EdmgStudio.Core.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Storage;
@@ -17,6 +18,7 @@ public sealed partial class ReactiveLabPage : Page
     private readonly ObservableCollection<string> _presetNames = [];
     private readonly List<ReactivePreset> _savedPresets = [];
     private IReadOnlyList<ProjectDto> _projects = [];
+    private ProjectDto? _project;
     private MusicGraphResponse? _musicGraph;
     private LiveCuesResponse? _liveCues;
     private LiveAssetsResponse? _liveAssets;
@@ -88,6 +90,53 @@ public sealed partial class ReactiveLabPage : Page
         }
     }
 
+    private async Task RefreshProjectRevisionAsync(string projectId, CancellationToken cancellationToken)
+    {
+        ProjectResponse refreshed = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        if (string.Equals(projectId, _activeProjectId, StringComparison.Ordinal))
+        {
+            _project = refreshed.Project;
+        }
+    }
+
+    private async Task HandleProjectRevisionConflictAsync(
+        ProjectRevisionConflictException conflict,
+        CancellationToken cancellationToken)
+    {
+        if (!await StudioPageHelpers.ConfirmReloadAfterRevisionConflictAsync(XamlRoot, conflict))
+        {
+            ShowStatus(
+                InfoBarSeverity.Warning,
+                "Project reload required",
+                "The failed change was not applied. Review your local Reactive Lab draft, reload, then retry.");
+            return;
+        }
+
+        try
+        {
+            await RefreshContextAsync(cancellationToken);
+            ShowStatus(
+                InfoBarSeverity.Informational,
+                "Project reloaded",
+                "The latest revision is loaded. Review the Reactive Lab payload, then retry your change.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (StudioApiException reloadError)
+        {
+            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.UserFacingMessage);
+        }
+        catch (HttpRequestException reloadError)
+        {
+            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
+        }
+        catch (JsonException reloadError)
+        {
+            ShowStatus(InfoBarSeverity.Error, "Reload failed", reloadError.Message);
+        }
+    }
+
     private async void Session_Changed(object? sender, EventArgs e)
     {
         if (_isSynchronizingProject)
@@ -149,6 +198,7 @@ public sealed partial class ReactiveLabPage : Page
         var timeline = await timelineTask;
         var localState = await localStateTask;
 
+        _project = project.Project;
         _musicGraph = graph;
         _liveCues = cues;
         _liveAssets = assets;
@@ -368,6 +418,7 @@ public sealed partial class ReactiveLabPage : Page
                 request,
                 StudioJsonContext.Default.ReactiveLabApplyRequest));
             await SaveLocalStateAsync();
+            await RefreshProjectRevisionAsync(_activeProjectId, cancellationToken);
         }, "Reactive results were persisted and merged into the project Timeline.");
     }
 
@@ -647,7 +698,8 @@ public sealed partial class ReactiveLabPage : Page
             HandoffManifest = _draftRequest.HandoffManifest,
             ExtensionData = _draftRequest.ExtensionData,
             OverwriteMotionTrack = OverwriteMotionTrackToggle.IsOn,
-            OverwriteCamera = OverwriteCameraToggle.IsOn
+            OverwriteCamera = OverwriteCameraToggle.IsOn,
+            ExpectedRevision = StudioPageHelpers.ExpectedRevision(_project),
         };
         errors = ValidateRequest(request);
         return errors.Count == 0;
@@ -846,7 +898,8 @@ public sealed partial class ReactiveLabPage : Page
             HandoffManifest = _draftRequest.HandoffManifest,
             ExtensionData = _draftRequest.ExtensionData,
             OverwriteMotionTrack = OverwriteMotionTrackToggle.IsOn,
-            OverwriteCamera = OverwriteCameraToggle.IsOn
+            OverwriteCamera = OverwriteCameraToggle.IsOn,
+            ExpectedRevision = StudioPageHelpers.ExpectedRevision(_project),
         };
         RawJsonTextBox.Text = FormatJson(JsonSerializer.Serialize(
             request,
@@ -918,6 +971,7 @@ public sealed partial class ReactiveLabPage : Page
 
     private void ClearContext()
     {
+        _project = null;
         _musicGraph = null;
         _liveCues = null;
         _liveAssets = null;
@@ -955,6 +1009,14 @@ public sealed partial class ReactiveLabPage : Page
         catch (OperationCanceledException) when (_operationCancellation.IsCancellationRequested)
         {
             ShowStatus(InfoBarSeverity.Warning, "Operation canceled", "No additional Reactive Lab changes were requested.");
+        }
+        catch (ProjectRevisionConflictException conflict)
+        {
+            await HandleProjectRevisionConflictAsync(conflict, _operationCancellation.Token);
+        }
+        catch (StudioApiException ex)
+        {
+            ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.UserFacingMessage);
         }
         catch (HttpRequestException ex)
         {

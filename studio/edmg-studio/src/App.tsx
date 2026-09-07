@@ -73,8 +73,10 @@ export default function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [skipLinkFocused, setSkipLinkFocused] = useState(false);
   const mainRef = useRef<HTMLElement | null>(null);
+  const backendUrlRef = useRef("");
   const shouldFocusMainRef = useRef(false);
   const currentPageRef = useRef(page);
+  backendUrlRef.current = normalizeBackendUrl(backendUrl);
 
   const focusMainContent = useCallback(() => {
     window.setTimeout(() => mainRef.current?.focus({ preventScroll: true }), 0);
@@ -161,7 +163,8 @@ export default function App() {
     const handleBackendUrlChanged = (event: Event) => {
       const detail = (event as CustomEvent<{ url?: string }>).detail;
       const nextUrl = normalizeBackendUrl(detail?.url || "");
-      if (!nextUrl) return;
+      if (!nextUrl || nextUrl === backendUrlRef.current) return;
+      backendUrlRef.current = nextUrl;
       setBackendUrl(nextUrl);
       setConfig(null);
       setBackendConfigError("");
@@ -336,7 +339,7 @@ export default function App() {
             </div>
           </div>
         ) : null}
-        <Suspense fallback={<PageLoadingFallback page={page} />}>
+        <Suspense key={backendUrl} fallback={<PageLoadingFallback page={page} />}>
           {content}
         </Suspense>
       </main>

@@ -19,6 +19,7 @@ namespace EdmgStudio.WinUI.Pages;
 public sealed partial class OutputsPage : Page
 {
     private readonly StudioApiClient _apiClient = App.Services.ApiClient;
+    private readonly StudioProjectMediaClient _projectMediaClient = App.Services.ProjectMediaClient;
     private readonly StudioSessionService _session = App.Services.Session;
     private readonly BackendConfiguration _backendConfiguration = App.Services.Configuration;
     private CancellationTokenSource? _previewCts;
@@ -109,14 +110,14 @@ public sealed partial class OutputsPage : Page
         _previewCts = new CancellationTokenSource();
         try
         {
-            await _apiClient.StreamProjectFileAsync<bool>(
+            await _projectMediaClient.StreamProjectMediaAsync<bool>(
                 ActiveProjectId,
                 selected.Path,
                 async (file, cancellationToken) =>
                 {
                     if (selected.IsVideo)
                     {
-                        await OutputPreview.LoadVideoStreamAsync(file.Stream, cancellationToken);
+                        await OutputPreview.LoadVideoStreamAsync(file.Stream, file.ContentHeaders.ContentLength, cancellationToken);
                     }
                     else
                     {
@@ -239,7 +240,7 @@ public sealed partial class OutputsPage : Page
             DeletePreviewTemp();
             string extension = Path.GetExtension(selected.Name);
             _previewTempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}{extension}");
-            await _apiClient.StreamProjectFileAsync<bool>(
+            await _projectMediaClient.StreamProjectMediaAsync<bool>(
                 ActiveProjectId,
                 selected.Path,
                 async (file, cancellationToken) =>
@@ -486,7 +487,7 @@ public sealed partial class OutputsPage : Page
             return;
         }
 
-        await _apiClient.StreamProjectFileAsync<bool>(
+        await _projectMediaClient.StreamProjectMediaAsync<bool>(
             ActiveProjectId,
             projectRelativePath,
             async (file, cancellationToken) =>

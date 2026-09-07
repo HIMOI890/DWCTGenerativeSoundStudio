@@ -1,4 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  BACKEND_URL_CHANGED_EVENT,
+  getBackendUrl,
+  normalizeBackendUrl,
+} from "./api";
 
 export type HandoffType = "planner" | "reactive";
 
@@ -10,6 +15,7 @@ export type SessionHandoff = {
 };
 
 type StudioSessionState = {
+  backendScope: string;
   projectId: string;
   selectedVariant: number;
   lastHandoff: SessionHandoff | null;
@@ -25,6 +31,7 @@ type StudioSessionValue = StudioSessionState & {
 const STORAGE_KEY = "edmg_studio_session_v1";
 
 const DEFAULT_STATE: StudioSessionState = {
+  backendScope: "",
   projectId: "",
   selectedVariant: 0,
   lastHandoff: null,
@@ -37,6 +44,7 @@ function canUseStorage() {
 function sanitizeState(raw: unknown): StudioSessionState {
   const candidate = raw && typeof raw === "object" ? (raw as Partial<StudioSessionState>) : {};
   return {
+    backendScope: normalizeBackendUrl(String(candidate.backendScope || "")),
     projectId: typeof candidate.projectId === "string" ? candidate.projectId : "",
     selectedVariant:
       typeof candidate.selectedVariant === "number" && Number.isFinite(candidate.selectedVariant)
@@ -53,14 +61,17 @@ function sanitizeState(raw: unknown): StudioSessionState {
   };
 }
 
-function readState(): StudioSessionState {
-  if (!canUseStorage()) return DEFAULT_STATE;
+function readState(backendScope = normalizeBackendUrl(getBackendUrl())): StudioSessionState {
+  if (!canUseStorage()) return { ...DEFAULT_STATE, backendScope };
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_STATE;
-    return sanitizeState(JSON.parse(raw));
+    if (!raw) return { ...DEFAULT_STATE, backendScope };
+    const state = sanitizeState(JSON.parse(raw));
+    return state.backendScope === backendScope
+      ? state
+      : { ...DEFAULT_STATE, backendScope };
   } catch {
-    return DEFAULT_STATE;
+    return { ...DEFAULT_STATE, backendScope };
   }
 }
 
@@ -116,10 +127,29 @@ export function StudioSessionProvider(props: { children: React.ReactNode }) {
   useEffect(() => {
     if (!canUseStorage()) return undefined;
     const onStorage = (event: StorageEvent) => {
-      if (event.key === STORAGE_KEY) setState(readState());
+      if (event.key === STORAGE_KEY) {
+        setState((current) => readState(current.backendScope));
+      }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onBackendChanged = (event: Event) => {
+      const nextScope = normalizeBackendUrl(
+        (event as CustomEvent<{ url?: string }>).detail?.url || "",
+      );
+      if (!nextScope) return;
+      setState((current) => (
+        current.backendScope === nextScope
+          ? current
+          : { ...DEFAULT_STATE, backendScope: nextScope }
+      ));
+    };
+    window.addEventListener(BACKEND_URL_CHANGED_EVENT, onBackendChanged);
+    return () => window.removeEventListener(BACKEND_URL_CHANGED_EVENT, onBackendChanged);
   }, []);
 
   const value = useMemo(

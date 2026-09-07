@@ -152,6 +152,7 @@ type SupervisorState struct {
 	StudioHome  string `json:"studioHome"`
 	LogPath     string `json:"logPath,omitempty"`
 	StartedAt   string `json:"startedAt"`
+	AttemptID   string `json:"attemptId,omitempty"`
 }
 
 type SupervisorStatus struct {
@@ -728,7 +729,7 @@ func StartManagedBackend(repoRoot, host string, port int, waitTimeout time.Durat
 				HealthNote:   "managed backend already running",
 			}, fmt.Errorf("managed backend already running with pid %d at %s", current.PID, current.BaseURL)
 		}
-		_ = os.Remove(statePath)
+		_ = removeSupervisorStateIfMatching(current)
 	}
 
 	bootstrap, err := ReadBootstrapReport()
@@ -770,11 +771,18 @@ func StartManagedBackend(repoRoot, host string, port int, waitTimeout time.Durat
 			HideWindow:    true,
 			CreationFlags: 0x00000008 | 0x00000200,
 		}
+	} else {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
 
 	if err := cmd.Start(); err != nil {
 		return SupervisorStatus{}, err
 	}
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+	startedAt := time.Now().UTC()
 
 	state := &SupervisorState{
 		Name:        "packaged-backend",
@@ -785,29 +793,44 @@ func StartManagedBackend(repoRoot, host string, port int, waitTimeout time.Durat
 		CommandPath: backendPath,
 		StudioHome:  bootstrap.Resolved.StudioHome,
 		LogPath:     logPath,
-		StartedAt:   time.Now().UTC().Format(time.RFC3339),
+		StartedAt:   startedAt.Format(time.RFC3339Nano),
+		AttemptID:   fmt.Sprintf("%d-%d", startedAt.UnixNano(), cmd.Process.Pid),
 	}
-	if err := WriteSupervisorState(state); err != nil {
-		_ = stopProcess(state.PID)
-		return SupervisorStatus{}, err
-	}
-
 	status := SupervisorStatus{
 		StateFile:    statePath,
-		Known:        true,
+		Known:        false,
 		ProcessAlive: true,
 		State:        state,
 	}
+	readinessErr := error(nil)
 	if waitTimeout > 0 {
-		err = waitForHealthURL(state.BaseURL, waitTimeout)
-		status.Healthy = err == nil
-		if err != nil {
-			status.HealthNote = err.Error()
-			return status, err
-		}
+		readinessErr = waitForManagedBackendReady(waitCh, state.BaseURL, waitTimeout)
 	} else {
-		status.Healthy = healthCheck(state.BaseURL, 1500*time.Millisecond) == nil
+		select {
+		case waitErr := <-waitCh:
+			readinessErr = normalizeManagedProcessWaitError(state.PID, waitErr)
+			if readinessErr == nil {
+				readinessErr = errors.New("managed backend exited before becoming healthy")
+			}
+		default:
+			readinessErr = healthCheck(state.BaseURL, 1500*time.Millisecond)
+		}
 	}
+	status.Healthy = readinessErr == nil
+	if readinessErr != nil {
+		cleanupErr := cleanupManagedBackendLaunch(cmd, waitCh, state)
+		status.ProcessAlive = false
+		status.HealthNote = composeManagedLaunchNote(state.LogPath, readinessErr, cleanupErr)
+		return status, composeManagedLaunchError(state.LogPath, nil, readinessErr, cleanupErr)
+	}
+	if err := WriteSupervisorState(state); err != nil {
+		primaryErr := fmt.Errorf("failed to record supervisor state for pid %d: %w", state.PID, err)
+		cleanupErr := cleanupManagedBackendLaunch(cmd, waitCh, state)
+		status.ProcessAlive = false
+		status.HealthNote = composeManagedLaunchNote(state.LogPath, primaryErr, cleanupErr)
+		return status, composeManagedLaunchError(state.LogPath, nil, primaryErr, cleanupErr)
+	}
+	status.Known = true
 	return status, nil
 }
 
@@ -854,15 +877,25 @@ func StopManagedBackend() (SupervisorStatus, error) {
 	if state == nil {
 		return SupervisorStatus{StateFile: statePath}, nil
 	}
-	_ = stopProcess(state.PID)
-	_ = os.Remove(statePath)
-	return SupervisorStatus{
+	cleanupErr := stopManagedProcessTreeAndWait(state.PID, 10*time.Second)
+	if err := removeSupervisorStateIfMatching(state); err != nil {
+		cleanupErr = errors.Join(cleanupErr, err)
+	}
+	status := SupervisorStatus{
 		StateFile:    statePath,
 		Known:        true,
 		ProcessAlive: false,
 		Healthy:      false,
 		State:        state,
-	}, nil
+	}
+	if cleanupErr != nil {
+		if alive, err := processAlive(state.PID); err == nil {
+			status.ProcessAlive = alive
+		}
+		status.HealthNote = composeLifecycleNote(nil, cleanupErr)
+		return status, cleanupErr
+	}
+	return status, nil
 }
 
 func runPackageManagerScript(repoRoot, script string) error {
@@ -1350,19 +1383,296 @@ func processAlive(pid int) (bool, error) {
 	return true, nil
 }
 
-func stopProcess(pid int) error {
+func stopProcessTree(pid int, force bool) error {
 	if pid <= 0 {
 		return nil
 	}
 	if runtime.GOOS == "windows" {
 		cmd := exec.Command("taskkill", "/PID", fmt.Sprintf("%d", pid), "/T", "/F")
-		return cmd.Run()
+		if err := cmd.Run(); err != nil {
+			alive, aliveErr := processAlive(pid)
+			if aliveErr == nil && !alive {
+				return nil
+			}
+			if aliveErr != nil {
+				return fmt.Errorf("re-check launched process %d: %w", pid, aliveErr)
+			}
+			return err
+		}
+		return nil
 	}
-	process, err := os.FindProcess(pid)
+	signal := syscall.SIGTERM
+	if force {
+		signal = syscall.SIGKILL
+	}
+	if err := syscall.Kill(-pid, signal); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			alive, aliveErr := processAlive(pid)
+			if aliveErr == nil && !alive {
+				return nil
+			}
+			if aliveErr != nil {
+				return fmt.Errorf("re-check launched process %d: %w", pid, aliveErr)
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+func cleanupManagedBackendLaunch(cmd *exec.Cmd, waitCh <-chan error, state *SupervisorState) error {
+	var cleanupErrs []error
+	if cmd != nil && cmd.Process != nil {
+		if err := stopManagedProcessTreeAndWaitForCmd(cmd, waitCh, 10*time.Second); err != nil {
+			cleanupErrs = append(cleanupErrs, err)
+		}
+	}
+	if err := removeSupervisorStateIfMatching(state); err != nil {
+		cleanupErrs = append(cleanupErrs, err)
+	}
+	return errors.Join(cleanupErrs...)
+}
+
+func stopManagedProcessTreeAndWaitForCmd(cmd *exec.Cmd, waitCh <-chan error, timeout time.Duration) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	if waitCh != nil {
+		select {
+		case waitErr := <-waitCh:
+			return normalizeManagedProcessWaitError(cmd.Process.Pid, waitErr)
+		default:
+		}
+	}
+
+	if err := stopProcessTree(cmd.Process.Pid, false); err != nil {
+		return fmt.Errorf("terminate launched process tree %d: %w", cmd.Process.Pid, err)
+	}
+	if timedOut, err := waitForManagedProcessExit(cmd.Process.Pid, waitCh, timeout); err != nil {
+		return err
+	} else if timedOut {
+		if err := stopProcessTree(cmd.Process.Pid, true); err != nil {
+			return fmt.Errorf("force terminate launched process tree %d: %w", cmd.Process.Pid, err)
+		}
+		if timedOut, err := waitForManagedProcessExit(cmd.Process.Pid, waitCh, timeout); err != nil {
+			return err
+		} else if timedOut {
+			return fmt.Errorf("launched process tree %d did not exit within %s", cmd.Process.Pid, timeout*2)
+		}
+	}
+	return nil
+}
+
+func stopManagedProcessTreeAndWait(pid int, timeout time.Duration) error {
+	if pid <= 0 {
+		return nil
+	}
+	if err := stopProcessTree(pid, false); err != nil {
+		return fmt.Errorf("terminate launched process tree %d: %w", pid, err)
+	}
+	if timedOut, err := waitForPIDExit(pid, timeout); err != nil {
+		return err
+	} else if timedOut {
+		if err := stopProcessTree(pid, true); err != nil {
+			return fmt.Errorf("force terminate launched process tree %d: %w", pid, err)
+		}
+		if timedOut, err := waitForPIDExit(pid, timeout); err != nil {
+			return err
+		} else if timedOut {
+			return fmt.Errorf("launched process tree %d did not exit within %s", pid, timeout*2)
+		}
+	}
+	return nil
+}
+
+func waitForManagedProcessExit(pid int, waitCh <-chan error, timeout time.Duration) (bool, error) {
+	if timeout <= 0 {
+		return false, normalizeManagedProcessWaitError(pid, <-waitCh)
+	}
+
+	select {
+	case err := <-waitCh:
+		return false, normalizeManagedProcessWaitError(pid, err)
+	case <-time.After(timeout):
+		alive, err := processAlive(pid)
+		if err != nil {
+			return false, fmt.Errorf("wait for launched process %d exit: %w", pid, err)
+		}
+		if alive {
+			return true, nil
+		}
+		return false, nil
+	}
+}
+
+func waitForPIDExit(pid int, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		alive, err := processAlive(pid)
+		if err != nil {
+			return false, fmt.Errorf("wait for launched process %d exit: %w", pid, err)
+		}
+		if !alive {
+			return false, nil
+		}
+		if timeout > 0 && time.Now().After(deadline) {
+			return true, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func normalizeManagedProcessWaitError(pid int, waitErr error) error {
+	if waitErr == nil {
+		return nil
+	}
+	alive, err := processAlive(pid)
+	if err == nil && !alive {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("wait for launched process %d exit: %w", pid, err)
+	}
+	return fmt.Errorf("wait for launched process %d exit: %w", pid, waitErr)
+}
+
+func waitForManagedBackendReady(waitCh <-chan error, baseURL string, timeout time.Duration) error {
+	if timeout <= 0 {
+		return nil
+	}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		select {
+		case waitErr := <-waitCh:
+			if waitErr == nil {
+				return errors.New("managed backend exited before becoming healthy")
+			}
+			return fmt.Errorf("managed backend exited before becoming healthy: %w", waitErr)
+		default:
+		}
+
+		probeTimeout := 2 * time.Second
+		if remaining := time.Until(deadline); remaining < probeTimeout {
+			probeTimeout = remaining
+		}
+		if probeTimeout <= 0 {
+			break
+		}
+
+		lastErr = healthCheck(baseURL, probeTimeout)
+		if lastErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		sleepFor := 250 * time.Millisecond
+		if remaining := time.Until(deadline); remaining < sleepFor {
+			sleepFor = remaining
+		}
+		if sleepFor > 0 {
+			time.Sleep(sleepFor)
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("backend did not become healthy in time")
+	}
+	return fmt.Errorf("managed backend readiness timed out after %s: %w", timeout.Round(time.Millisecond), lastErr)
+}
+
+func removeSupervisorStateIfMatching(match *SupervisorState) error {
+	if match == nil {
+		return nil
+	}
+	statePath, err := SupervisorStatePath()
 	if err != nil {
 		return err
 	}
-	return process.Signal(syscall.SIGTERM)
+	current, err := ReadSupervisorState()
+	if err != nil {
+		return err
+	}
+	if current == nil || !sameSupervisorState(current, match) {
+		return nil
+	}
+	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func sameSupervisorState(current, match *SupervisorState) bool {
+	if current == nil || match == nil {
+		return false
+	}
+	if current.AttemptID != "" && match.AttemptID != "" {
+		return current.AttemptID == match.AttemptID
+	}
+	return current.Name == match.Name &&
+		current.PID == match.PID &&
+		current.Port == match.Port &&
+		current.StartedAt == match.StartedAt &&
+		strings.EqualFold(strings.TrimSpace(current.BaseURL), strings.TrimSpace(match.BaseURL)) &&
+		samePath(current.CommandPath, match.CommandPath) &&
+		samePath(current.StudioHome, match.StudioHome)
+}
+
+func samePath(left, right string) bool {
+	left = cleanPath(left)
+	right = cleanPath(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
+func composeLifecycleNote(primaryErr, cleanupErr error) string {
+	if primaryErr == nil {
+		if cleanupErr == nil {
+			return ""
+		}
+		return cleanupErr.Error()
+	}
+	if cleanupErr == nil {
+		return primaryErr.Error()
+	}
+	return fmt.Sprintf("%s (cleanup: %s)", primaryErr, cleanupErr)
+}
+
+func composeLifecycleError(primaryErr, cleanupErr error) error {
+	if primaryErr == nil {
+		return cleanupErr
+	}
+	if cleanupErr == nil {
+		return primaryErr
+	}
+	return fmt.Errorf("%w (cleanup: %v)", primaryErr, cleanupErr)
+}
+
+func composeManagedLaunchNote(logPath string, primaryErr, cleanupErr error) string {
+	note := composeLifecycleNote(primaryErr, cleanupErr)
+	if logPath == "" {
+		return note
+	}
+	if note == "" {
+		return fmt.Sprintf("inspect log %s", logPath)
+	}
+	return fmt.Sprintf("%s (inspect log %s)", note, logPath)
+}
+
+func composeManagedLaunchError(logPath string, prefix error, primaryErr, cleanupErr error) error {
+	combined := primaryErr
+	if prefix != nil {
+		combined = fmt.Errorf("%w: %v", prefix, primaryErr)
+	}
+	if cleanupErr != nil {
+		combined = composeLifecycleError(combined, cleanupErr)
+	}
+	if logPath == "" {
+		return combined
+	}
+	return fmt.Errorf("%w (inspect log %s)", combined, logPath)
 }
 
 func parseMajorMinor(version string) (int, int) {

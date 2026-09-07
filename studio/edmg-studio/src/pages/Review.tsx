@@ -1,9 +1,24 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, buildProjectFileUrl, getBackendUrl } from "../components/api";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  apiGet,
+  apiPost,
+  getBackendUrl,
+  isProjectRevisionConflict,
+  type ApiError,
+  type SignedProjectMediaRequest,
+} from "../components/api";
+import {
+  ProjectRevisionConflict,
+  expectedRevisionBody,
+  projectRevision,
+  projectRevisionFromResponse,
+} from "../components/ProjectRevisionConflict";
+import { RenewingVideo } from "../components/RenewingMedia";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { useStudioPageLayout } from "../components/studioLayout";
 import { resolveProjectId } from "../components/projectSelection";
 import { useStudioSession } from "../components/studioSession";
+import { useSignedProjectMedia } from "../hooks/useSignedProjectMedia";
 import { ProjectJobsPanel } from "../shared/jobs/ProjectJobsPanel";
 import { useProjectJobs } from "../shared/jobs/useProjectJobs";
 import type { PageProps } from "../types/pageProps";
@@ -49,6 +64,8 @@ export default function Review(props: PageProps) {
   const [busy, setBusy] = useState(false);
   const [jobInfo, setJobInfo] = useState<string | null>(null);
   const [autoRefreshJobs, setAutoRefreshJobs] = useState(true);
+  const projectRevisionRef = useRef<number | null>(null);
+  const [revisionConflict, setRevisionConflict] = useState<ApiError | null>(null);
 
   const {
     jobs,
@@ -107,11 +124,15 @@ export default function Review(props: PageProps) {
   };
 
   const refreshReview = async (pid: string) => {
-    const [reviewData, continuityData, publishData] = await Promise.all([
-      apiGet(`/v1/projects/${pid}/variant_review`),
-      apiGet(`/v1/projects/${pid}/render/conductor/continuity?variant_index=${variantIndex}`),
-      apiGet(`/v1/projects/${pid}/live_cues/publish/status`),
+    const encodedProjectId = encodeURIComponent(pid);
+    const [projectData, reviewData, continuityData, publishData] = await Promise.all([
+      apiGet(`/v1/projects/${encodedProjectId}`),
+      apiGet(`/v1/projects/${encodedProjectId}/variant_review`),
+      apiGet(`/v1/projects/${encodedProjectId}/render/conductor/continuity?variant_index=${variantIndex}`),
+      apiGet(`/v1/projects/${encodedProjectId}/live_cues/publish/status`),
     ]);
+    projectRevisionRef.current = projectRevision(projectData?.project);
+    setRevisionConflict(null);
     setReview(reviewData.variant_review || null);
     setContinuity(continuityData.continuity || null);
     setPublishStatus(publishData.publish || null);
@@ -122,11 +143,25 @@ export default function Review(props: PageProps) {
   }, [backendUrl]);
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) {
+      projectRevisionRef.current = null;
+      setRevisionConflict(null);
+      return;
+    }
     refreshReview(projectId).catch((error) => setErr(String(error)));
   }, [projectId, variantIndex, backendUrl]);
 
   const groups = (review?.groups || []) as VariantGroup[];
+  const mediaRequests = useMemo<SignedProjectMediaRequest[]>(
+    () => Array.from(new Set(
+      groups.flatMap((group) => group.artifacts.map((artifact) => String(artifact.path || "").trim())),
+    ))
+      .filter(Boolean)
+      .map((path) => ({ purpose: "file", path })),
+    [review],
+  );
+  const signedMedia = useSignedProjectMedia(projectId, mediaRequests, backendUrl);
+  const fileUrl = (rel: string) => signedMedia.urlFor({ purpose: "file", path: rel });
   const selectedArtifacts = groups
     .flatMap((group) => group.artifacts)
     .filter((artifact) => selectedPaths.includes(artifact.path));
@@ -135,6 +170,18 @@ export default function Review(props: PageProps) {
     setSelectedPaths((current) =>
       current.includes(path) ? current.filter((item) => item !== path) : [...current, path].slice(-4),
     );
+  };
+
+  const withExpectedRevision = <T extends Record<string, unknown>,>(body: T) =>
+    expectedRevisionBody(body, { revision: projectRevisionRef.current });
+
+  const setRevisionFromResponse = (response: unknown) => {
+    const revision = projectRevisionFromResponse(response);
+    if (revision != null) projectRevisionRef.current = revision;
+  };
+
+  const reportMutationError = (error: unknown) => {
+    if (isProjectRevisionConflict(error)) setRevisionConflict(error);
   };
 
   const applyDecision = async (decision: "approved" | "rejected" | "cherry_picked") => {
@@ -147,7 +194,7 @@ export default function Review(props: PageProps) {
     setInfo(null);
     try {
       for (const path of selectedPaths) {
-        await apiPost(`/v1/projects/${projectId}/variant_review/decision`, {
+      const result = await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/variant_review/decision`, withExpectedRevision({
           artifact_path: path,
           decision,
           notes,
@@ -155,12 +202,14 @@ export default function Review(props: PageProps) {
             ? traits.split(",").map((item) => item.trim()).filter(Boolean)
             : [],
           lock_fields: decision === "approved" ? ["timing", "reference"] : [],
-        });
+        }));
+        setRevisionFromResponse(result);
       }
       setInfo(`${decision} applied to ${selectedPaths.length} artifact(s).`);
       setSelectedPaths([]);
       await refreshReview(projectId);
     } catch (error: any) {
+      reportMutationError(error);
       setErr(String(error));
     } finally {
       setBusy(false);
@@ -172,16 +221,18 @@ export default function Review(props: PageProps) {
     setBusy(true);
     setErr(null);
     try {
-      const result = await apiPost(`/v1/projects/${projectId}/live_cues/publish/start`, {
+      const result = await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/live_cues/publish/start`, withExpectedRevision({
         osc_host: oscHost,
         osc_port: oscPort,
         midi_enabled: true,
         websocket_enabled: true,
         playback_speed: 4,
-      });
+      }));
+      setRevisionFromResponse(result);
       setPublishStatus(result.publish || null);
       setInfo("Live cue publish started (experimental).");
     } catch (error: any) {
+      reportMutationError(error);
       setErr(String(error));
     } finally {
       setBusy(false);
@@ -190,9 +241,22 @@ export default function Review(props: PageProps) {
 
   const stopPublish = async () => {
     if (!projectId) return;
-    const result = await apiPost(`/v1/projects/${projectId}/live_cues/publish/stop`, {});
-    setPublishStatus(result.publish || null);
-    setInfo("Live cue publish stopped.");
+    setBusy(true);
+    setErr(null);
+    try {
+      const result = await apiPost(
+        `/v1/projects/${encodeURIComponent(projectId)}/live_cues/publish/stop`,
+        withExpectedRevision({}),
+      );
+      setRevisionFromResponse(result);
+      setPublishStatus(result.publish || null);
+      setInfo("Live cue publish stopped.");
+    } catch (error: any) {
+      reportMutationError(error);
+      setErr(String(error));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const exportAdapter = async (adapter: "touchdesigner" | "unreal") => {
@@ -200,20 +264,20 @@ export default function Review(props: PageProps) {
     setBusy(true);
     setErr(null);
     try {
-      const result = await apiPost(`/v1/projects/${projectId}/world_adapters/export`, {
+      const result = await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/world_adapters/export`, withExpectedRevision({
         adapter,
         variant_index: variantIndex,
         sequence_name: "EDMG_LiveSet",
-      });
+      }));
+      setRevisionFromResponse(result);
       setInfo(`${adapter} adapter export ready (${result.simulation?.simulated_events ?? 0} events).`);
     } catch (error: any) {
+      reportMutationError(error);
       setErr(String(error));
     } finally {
       setBusy(false);
     }
   };
-
-  const fileUrl = (rel: string) => buildProjectFileUrl(backendUrl, projectId, rel);
 
   const panelContent: Record<ReviewPanelId, React.ReactNode> = {
     controls: (
@@ -287,7 +351,7 @@ export default function Review(props: PageProps) {
                     }}
                   >
                     {artifact.kind === "video" ? (
-                      <video src={fileUrl(artifact.path)} controls style={{ width: "100%", borderRadius: 8 }} />
+                      <RenewingVideo sourceUrl={fileUrl(artifact.path)} controls style={{ width: "100%", borderRadius: 8 }} />
                     ) : (
                       <img src={fileUrl(artifact.path)} alt={artifact.name} style={{ width: "100%", borderRadius: 8 }} />
                     )}
@@ -391,6 +455,14 @@ export default function Review(props: PageProps) {
 
   return (
     <div className="page-stack">
+      <ProjectRevisionConflict
+        conflict={revisionConflict}
+        onReload={async () => {
+          if (!projectId) return;
+          setErr(null);
+          await refreshReview(projectId);
+        }}
+      />
       <StudioLayoutCustomizer
         title="Review layout"
         description="Reorder or hide variant compare, continuity, and live publish panels."

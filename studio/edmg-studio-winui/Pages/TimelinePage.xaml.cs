@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using EdmgStudio.Core.Models;
+using EdmgStudio.Core.Services;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -79,6 +80,7 @@ public sealed partial class TimelinePage : Page
     private bool _syncingScroll;
     private bool _suppressSessionChange;
     private bool _suppressCameraSelectionChange;
+    private bool _revisionConflictInterruptedOperation;
     private TimelinePointerTool _pointerTool;
 
     public TimelinePage()
@@ -1499,12 +1501,20 @@ public sealed partial class TimelinePage : Page
                 ToJsonElement(_timelineDocument),
                 metadata,
                 reason,
+                StudioPageHelpers.ExpectedRevision(_project),
+                _pageCancellation?.Token ?? CancellationToken.None);
+            await RefreshProjectRevisionAsync(
+                _loadedProjectId,
                 _pageCancellation?.Token ?? CancellationToken.None);
             StatusText.Text = "Autosaved.";
             await RefreshRecoveryAsync();
         }
         catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
         {
+        }
+        catch (ProjectRevisionConflictException conflict)
+        {
+            await HandleProjectRevisionConflictAsync(conflict);
         }
         catch (Exception ex)
         {
@@ -1562,6 +1572,10 @@ public sealed partial class TimelinePage : Page
         catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
         {
         }
+        catch (ProjectRevisionConflictException conflict)
+        {
+            await HandleProjectRevisionConflictAsync(conflict);
+        }
         catch (Exception ex)
         {
             ShowInfo(ex.Message, InfoBarSeverity.Error);
@@ -1582,7 +1596,9 @@ public sealed partial class TimelinePage : Page
         await App.Services.ApiClient.SaveTimelineAsync(
             _loadedProjectId,
             ToJsonElement(_timelineDocument),
+            StudioPageHelpers.ExpectedRevision(_project),
             cancellationToken);
+        await RefreshProjectRevisionAsync(_loadedProjectId, cancellationToken);
         _isDirty = false;
         StatusText.Text = "Timeline saved.";
         await RefreshRecoveryAsync();
@@ -1662,12 +1678,14 @@ public sealed partial class TimelinePage : Page
                     instruction,
                     "timeline edit; preserve source intent; return practical shot timing and editable prompts",
                     1,
-                    maximumScenes);
+                    maximumScenes,
+                    StudioPageHelpers.ExpectedRevision(_project));
                 PlanDto plan = await App.Services.ApiClient.GeneratePlanAsync(
                     _loadedProjectId,
                     request,
                     "creative",
                     token);
+                await RefreshProjectRevisionAsync(_loadedProjectId, token);
                 PlanVariantDto variant = plan.Variants.FirstOrDefault()
                     ?? throw new InvalidOperationException("The planner returned no editable variants.");
 
@@ -1743,11 +1761,13 @@ public sealed partial class TimelinePage : Page
                         _loadedProjectId,
                         _loadedVariantIndex,
                         overwrite,
+                        StudioPageHelpers.ExpectedRevision(_project),
                         token);
                 if (!response.Ok)
                 {
                     throw new InvalidOperationException("The backend did not apply the Workspace plan.");
                 }
+                await RefreshProjectRevisionAsync(_loadedProjectId, token);
 
                 JsonObject result = TimelineProjection.PreserveLockedTracks(
                     before,
@@ -1932,11 +1952,13 @@ public sealed partial class TimelinePage : Page
                         _loadedProjectId,
                         [new MotionPhraseRequest(phrase, startSeconds, endSeconds)],
                         OverwriteMotionToggle.IsOn,
+                        StudioPageHelpers.ExpectedRevision(_project),
                         token);
                 if (!response.Ok)
                 {
                     throw new InvalidOperationException("The backend did not apply the motion grammar.");
                 }
+                await RefreshProjectRevisionAsync(_loadedProjectId, token);
 
                 JsonObject result = TimelineProjection.PreserveLockedTracks(
                     before,
@@ -2818,6 +2840,10 @@ public sealed partial class TimelinePage : Page
         catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
         {
         }
+        catch (ProjectRevisionConflictException conflict)
+        {
+            await HandleProjectRevisionConflictAsync(conflict);
+        }
         catch (Exception ex)
         {
             StatusText.Text = "Render could not be queued.";
@@ -2910,13 +2936,20 @@ public sealed partial class TimelinePage : Page
         {
             await App.Services.ApiClient.ApplyRecoveryAsync(
                 _loadedProjectId,
-                new RecoveryApplyRequest(source, snapshotName),
+                new RecoveryApplyRequest(
+                    source,
+                    snapshotName,
+                    StudioPageHelpers.ExpectedRevision(_project)),
                 _pageCancellation?.Token ?? CancellationToken.None);
             await LoadActiveProjectAsync(forceReload: true);
             ShowInfo("Recovery data was restored.", InfoBarSeverity.Success);
         }
         catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
         {
+        }
+        catch (ProjectRevisionConflictException conflict)
+        {
+            await HandleProjectRevisionConflictAsync(conflict);
         }
         catch (Exception ex)
         {
@@ -3003,6 +3036,10 @@ public sealed partial class TimelinePage : Page
         }
         catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
         {
+        }
+        catch (ProjectRevisionConflictException conflict)
+        {
+            await HandleProjectRevisionConflictAsync(conflict);
         }
         catch (Exception ex)
         {
@@ -3138,6 +3175,39 @@ public sealed partial class TimelinePage : Page
         return true;
     }
 
+    private async Task RefreshProjectRevisionAsync(
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        ProjectResponse refreshed = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        if (string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
+        {
+            _project = refreshed.Project;
+        }
+    }
+
+    private async Task HandleProjectRevisionConflictAsync(ProjectRevisionConflictException conflict)
+    {
+        _revisionConflictInterruptedOperation = true;
+        if (!await StudioPageHelpers.ConfirmReloadAfterRevisionConflictAsync(XamlRoot, conflict))
+        {
+            ShowInfo(
+                "The failed change was not applied. Your local Timeline edits remain open; reload the project before retrying.",
+                InfoBarSeverity.Warning);
+            return;
+        }
+
+        string? projectId = _loadedProjectId;
+        await LoadActiveProjectAsync(forceReload: true);
+        if (_project is not null &&
+            string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
+        {
+            ShowInfo(
+                "The latest project revision is loaded. Review the Timeline, then retry your change.",
+                InfoBarSeverity.Informational);
+        }
+    }
+
     private async Task RunAutomationAsync(
         string progressMessage,
         Func<CancellationToken, Task<string>> operation)
@@ -3151,6 +3221,7 @@ public sealed partial class TimelinePage : Page
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(pageToken);
         _automationCancellation = cancellation;
         _isAutomationBusy = true;
+        _revisionConflictInterruptedOperation = false;
         AutomationProgressBar.IsIndeterminate = true;
         AutomationProgressBar.Visibility = Visibility.Visible;
         ShowAutomationInfo(progressMessage, InfoBarSeverity.Informational);
@@ -3159,7 +3230,10 @@ public sealed partial class TimelinePage : Page
         try
         {
             string result = await operation(cancellation.Token);
-            ShowAutomationInfo(result, InfoBarSeverity.Success);
+            if (!_revisionConflictInterruptedOperation)
+            {
+                ShowAutomationInfo(result, InfoBarSeverity.Success);
+            }
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
@@ -3167,6 +3241,10 @@ public sealed partial class TimelinePage : Page
             {
                 ShowAutomationInfo("The Timeline workflow was canceled.", InfoBarSeverity.Warning);
             }
+        }
+        catch (ProjectRevisionConflictException conflict)
+        {
+            await HandleProjectRevisionConflictAsync(conflict);
         }
         catch (Exception ex)
         {

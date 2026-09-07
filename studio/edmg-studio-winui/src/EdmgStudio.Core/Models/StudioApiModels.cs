@@ -37,6 +37,12 @@ public sealed class ProjectDto
     [JsonPropertyName("created_at")]
     public string CreatedAt { get; init; } = string.Empty;
 
+    [JsonPropertyName("updated_at")]
+    public string UpdatedAt { get; init; } = string.Empty;
+
+    [JsonPropertyName("revision")]
+    public long Revision { get; init; }
+
     [JsonPropertyName("meta")]
     public JsonElement Meta { get; init; }
 
@@ -180,7 +186,10 @@ public sealed record PlanRequest(
     [property: JsonPropertyName("user_notes")] string? UserNotes,
     [property: JsonPropertyName("style_prefs")] string? StylePreferences,
     [property: JsonPropertyName("num_variants")] int NumberOfVariants = 3,
-    [property: JsonPropertyName("max_scenes")] int MaximumScenes = 12);
+    [property: JsonPropertyName("max_scenes")] int MaximumScenes = 12,
+    [property: JsonPropertyName("expected_revision")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    long? ExpectedRevision = null);
 
 public sealed class AnalysisResponse
 {
@@ -189,6 +198,49 @@ public sealed class AnalysisResponse
 
     [JsonPropertyName("analysis")]
     public JsonElement Analysis { get; init; }
+}
+
+public sealed class SignedMediaUrlBatchRequest
+{
+    [JsonPropertyName("requests")]
+    public List<SignedMediaUrlRequest> Requests { get; init; } = [];
+}
+
+public sealed class SignedMediaUrlRequest
+{
+    [JsonPropertyName("purpose")]
+    public string Purpose { get; init; } = string.Empty;
+
+    [JsonPropertyName("path")]
+    public string? Path { get; init; }
+
+    [JsonPropertyName("query")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public JsonElement Query { get; init; }
+}
+
+public sealed class SignedMediaUrlBatchResponse
+{
+    [JsonPropertyName("expires_at")]
+    public long ExpiresAtUnixSeconds { get; init; }
+
+    [JsonPropertyName("urls")]
+    public List<SignedMediaUrlResponse> Urls { get; init; } = [];
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
+}
+
+public sealed class SignedMediaUrlResponse
+{
+    [JsonPropertyName("purpose")]
+    public string Purpose { get; init; } = string.Empty;
+
+    [JsonPropertyName("url")]
+    public string Url { get; init; } = string.Empty;
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalData { get; set; }
 }
 
 public sealed class PlanDto
@@ -348,12 +400,18 @@ public sealed record StudioJobProgress(
     [property: JsonPropertyName("total")] double? Total);
 
 public sealed record TimelineUpdateRequest(
-    [property: JsonPropertyName("timeline")] JsonElement Timeline);
+    [property: JsonPropertyName("timeline")] JsonElement Timeline,
+    [property: JsonPropertyName("expected_revision")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    long? ExpectedRevision = null);
 
 public sealed record TimelineAutosaveRequest(
     [property: JsonPropertyName("timeline")] JsonElement Timeline,
     [property: JsonPropertyName("meta")] JsonElement? Metadata = null,
-    [property: JsonPropertyName("reason")] string? Reason = null);
+    [property: JsonPropertyName("reason")] string? Reason = null,
+    [property: JsonPropertyName("expected_revision")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    long? ExpectedRevision = null);
 
 public sealed record TimelineRenderRequest(
     [property: JsonPropertyName("width")] int Width,
@@ -376,7 +434,10 @@ public sealed record MotionPhraseRequest(
 
 public sealed record ApplyMotionGrammarRequest(
     [property: JsonPropertyName("phrases")] IReadOnlyList<MotionPhraseRequest> Phrases,
-    [property: JsonPropertyName("overwrite_motion_track")] bool OverwriteMotionTrack = false);
+    [property: JsonPropertyName("overwrite_motion_track")] bool OverwriteMotionTrack = false,
+    [property: JsonPropertyName("expected_revision")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    long? ExpectedRevision = null);
 
 public sealed record ApplyMotionGrammarResponse(
     [property: JsonPropertyName("ok")] bool Ok,
@@ -384,7 +445,10 @@ public sealed record ApplyMotionGrammarResponse(
 
 public sealed record RecoveryApplyRequest(
     [property: JsonPropertyName("source")] string Source = "journal",
-    [property: JsonPropertyName("snapshot_name")] string? SnapshotName = null);
+    [property: JsonPropertyName("snapshot_name")] string? SnapshotName = null,
+    [property: JsonPropertyName("expected_revision")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    long? ExpectedRevision = null);
 
 public sealed class VariantReviewDecisionRequest
 {
@@ -648,6 +712,10 @@ public static class StudioJson
 [JsonSerializable(typeof(ProjectResponse))]
 [JsonSerializable(typeof(CreateProjectRequest))]
 [JsonSerializable(typeof(AnalysisResponse))]
+[JsonSerializable(typeof(SignedMediaUrlBatchRequest))]
+[JsonSerializable(typeof(SignedMediaUrlRequest))]
+[JsonSerializable(typeof(SignedMediaUrlBatchResponse))]
+[JsonSerializable(typeof(SignedMediaUrlResponse))]
 [JsonSerializable(typeof(PlanRequest))]
 [JsonSerializable(typeof(PlanDto))]
 [JsonSerializable(typeof(List<PlanVariantDto>))]

@@ -1,11 +1,28 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, buildProjectFileUrl, getBackendUrl } from "../components/api";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  apiGet,
+  apiPost,
+  getBackendUrl,
+  isProjectRevisionConflict,
+  isRequestAbortError,
+  type ApiError,
+  type SignedProjectMediaRequest,
+} from "../components/api";
 import { desktopActionLabel, runDesktopArtifactAction } from "../components/desktopArtifacts";
+import {
+  ProjectRevisionConflict,
+  expectedRevisionBody,
+  projectRevision,
+  projectRevisionFromResponse,
+} from "../components/ProjectRevisionConflict";
+import { RenewingVideo } from "../components/RenewingMedia";
 import { StudioLayoutCustomizer } from "../components/StudioLayoutCustomizer";
 import { StructuredSummary } from "../components/StructuredSummary";
 import { resolveProjectId } from "../components/projectSelection";
 import { useStudioSession } from "../components/studioSession";
 import { useStudioPageLayout } from "../components/studioLayout";
+import { useAdaptivePolling } from "../hooks/useAdaptivePolling";
+import { useSignedProjectMedia } from "../hooks/useSignedProjectMedia";
 import { JobActionButtons } from "../shared/jobs/JobActionButtons";
 import { postQueueJobAction, type QueueJobAction } from "../shared/jobs/jobActions";
 import { JobStatusChip } from "../shared/jobs/JobStatusChip";
@@ -37,32 +54,101 @@ export default function Outputs(props: PageProps) {
   const [unrealExportBusy, setUnrealExportBusy] = useState<boolean>(false);
   const [unrealPlanBusyBundle, setUnrealPlanBusyBundle] = useState<string>("");
   const [unrealImportBusyBundle, setUnrealImportBusyBundle] = useState<string>("");
+  const projectRevisionRef = useRef<number | null>(null);
+  const [revisionConflict, setRevisionConflict] = useState<ApiError | null>(null);
 
-  const refreshProjects = async () => {
+  const refreshProjects = useCallback(async () => {
     const d = await apiGet("/v1/projects");
     const ps = d.projects || [];
     setProjects(ps);
     const nextProjectId = resolveProjectId(ps, projectId);
     if (nextProjectId !== projectId) setProjectId(nextProjectId);
-  };
+  }, [projectId, setProjectId]);
 
-  const refreshOutputs = async (pid: string) => {
-    const d = await apiGet(`/v1/projects/${pid}/outputs`);
+  const refreshOutputs = useCallback(async (pid: string, signal?: AbortSignal) => {
+    const d = await apiGet(`/v1/projects/${encodeURIComponent(pid)}/outputs`, { signal });
     setOuts(d);
     setLastRefreshAt(Date.now());
+    return d;
+  }, []);
+
+  const refreshProjectRevision = useCallback(async (pid: string) => {
+    const data = await apiGet(`/v1/projects/${encodeURIComponent(pid)}`);
+    projectRevisionRef.current = projectRevision(data?.project);
+    setRevisionConflict(null);
+  }, []);
+
+  const withExpectedRevision = <T extends Record<string, unknown>,>(body: T) =>
+    expectedRevisionBody(body, { revision: projectRevisionRef.current });
+
+  const setRevisionFromResponse = (response: unknown) => {
+    const revision = projectRevisionFromResponse(response);
+    if (revision != null) projectRevisionRef.current = revision;
   };
 
-  useEffect(() => { refreshProjects().catch(() => {}); }, [backendUrl]);
-  useEffect(() => { if (projectId) refreshOutputs(projectId).catch((e) => setErr(String(e))); }, [projectId]);
-  useEffect(() => {
-    if (!projectId || !autoRefresh) return;
-    const timer = window.setInterval(() => {
-      refreshOutputs(projectId).catch((e) => setErr(String(e)));
-    }, 2500);
-    return () => window.clearInterval(timer);
-  }, [projectId, autoRefresh, backendUrl]);
+  const reportMutationError = (error: unknown) => {
+    if (isProjectRevisionConflict(error)) setRevisionConflict(error);
+  };
 
-  const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pid, rel);
+  const pollOutputs = useCallback(async (signal: AbortSignal) => {
+    if (!projectId) return { continuePolling: false };
+    try {
+      const data = await refreshOutputs(projectId, signal);
+      return { active: (data?.active_internal_jobs || []).length > 0 };
+    } catch (error) {
+      if (!isRequestAbortError(error)) setErr(String(error));
+      throw error;
+    }
+  }, [projectId, refreshOutputs]);
+
+  const outputPolling = useAdaptivePolling({
+    poll: pollOutputs,
+    enabled: !!projectId && autoRefresh,
+    activeIntervalMs: 2500,
+    idleIntervalMs: 2500,
+    scopeKey: `${backendUrl}:${projectId}`,
+  });
+
+  useEffect(() => { refreshProjects().catch(() => {}); }, [backendUrl, refreshProjects]);
+  useEffect(() => {
+    if (!projectId) {
+      projectRevisionRef.current = null;
+      setRevisionConflict(null);
+      setOuts(null);
+      return;
+    }
+    refreshProjectRevision(projectId).catch((e) => setErr(String(e)));
+    if (!autoRefresh) refreshOutputs(projectId).catch((e) => setErr(String(e)));
+  }, [autoRefresh, backendUrl, projectId, refreshOutputs, refreshProjectRevision]);
+
+  const mediaPaths = useMemo(() => {
+    const paths = new Set<string>();
+    const add = (value: unknown) => {
+      const path = String(value || "").trim();
+      if (path) paths.add(path);
+    };
+    add(selected?.path);
+    add(outs?.latest_internal_render?.video);
+    for (const entry of outs?.internal_render_history || []) add(entry?.video);
+    for (const entry of outs?.videos || []) add(entry?.path);
+    for (const entry of outs?.images || []) add(entry?.path);
+    for (const entry of outs?.deforum_exports || []) add(entry?.path);
+    for (const bundle of outs?.unreal_exports || []) {
+      add(bundle?.manifest_path);
+      add(bundle?.import_plan_path);
+      add(bundle?.zip_path);
+    }
+    return [...paths];
+  }, [outs, selected?.path]);
+  const mediaRequests = useMemo<SignedProjectMediaRequest[]>(
+    () => mediaPaths.map((path) => ({ purpose: "file", path })),
+    [mediaPaths],
+  );
+  const signedMedia = useSignedProjectMedia(projectId, mediaRequests, backendUrl);
+  const fileUrl = useCallback(
+    (rel: string) => signedMedia.urlFor({ purpose: "file", path: rel }),
+    [signedMedia.urlFor],
+  );
   const activeInternalJobs = (outs?.active_internal_jobs || []) as any[];
 
   const renderMetadataCard = (entry: any) => {
@@ -151,7 +237,7 @@ export default function Outputs(props: PageProps) {
     if (!projectId) return;
     try {
       setErr(null);
-      await apiPost(`/v1/projects/${projectId}/render/internal/video`, {
+      const result = await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/render/internal/video`, withExpectedRevision({
         variant_index: Number(entry?.variant_index ?? 0),
         model_id: "auto",
         fps_render: Number(entry?.fps_render ?? 2),
@@ -159,9 +245,11 @@ export default function Outputs(props: PageProps) {
         temporal_mode: String(entry?.temporal_mode || "frame_img2img"),
         render_mode: "auto",
         resume_existing_frames: true,
-      });
+      }));
+      setRevisionFromResponse(result);
       await refreshOutputs(projectId);
     } catch (e: any) {
+      reportMutationError(e);
       setErr(String(e));
     }
   };
@@ -169,9 +257,14 @@ export default function Outputs(props: PageProps) {
   const resumeInternalJob = async (job: any) => {
     try {
       setErr(null);
-      await apiPost(`/v1/projects/${job.project_id}/jobs/${job.id}/resume_from_checkpoint`, {});
+      const result = await apiPost(
+        `/v1/projects/${encodeURIComponent(job.project_id)}/jobs/${encodeURIComponent(job.id)}/resume_from_checkpoint`,
+        withExpectedRevision({}),
+      );
+      setRevisionFromResponse(result);
       await refreshOutputs(job.project_id);
     } catch (e: any) {
+      reportMutationError(e);
       setErr(String(e));
     }
   };
@@ -179,9 +272,14 @@ export default function Outputs(props: PageProps) {
   const restartInternalJobClean = async (job: any) => {
     try {
       setErr(null);
-      await apiPost(`/v1/projects/${job.project_id}/jobs/${job.id}/restart_clean`, {});
+      const result = await apiPost(
+        `/v1/projects/${encodeURIComponent(job.project_id)}/jobs/${encodeURIComponent(job.id)}/restart_clean`,
+        withExpectedRevision({}),
+      );
+      setRevisionFromResponse(result);
       await refreshOutputs(job.project_id);
     } catch (e: any) {
+      reportMutationError(e);
       setErr(String(e));
     }
   };
@@ -189,9 +287,11 @@ export default function Outputs(props: PageProps) {
   const runInternalJobAction = async (job: StudioJob, action: QueueJobAction) => {
     try {
       setErr(null);
-      await postQueueJobAction(job, action);
+      const result = await postQueueJobAction(job, action, withExpectedRevision({}));
+      setRevisionFromResponse(result);
       await refreshOutputs(job.project_id);
     } catch (e: any) {
+      reportMutationError(e);
       setErr(String(e));
     }
   };
@@ -201,11 +301,12 @@ export default function Outputs(props: PageProps) {
     try {
       setErr(null);
       setUnrealExportBusy(true);
-      const result = await apiPost(`/v1/projects/${projectId}/export/unreal`, {
+      const result = await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/export/unreal`, withExpectedRevision({
         variant_index: Math.max(0, (Number(unrealVariantNumber) || 1) - 1),
         bundle_name: unrealBundleName.trim() || null,
         include_zip: unrealIncludeZip,
-      });
+      }));
+      setRevisionFromResponse(result);
       await refreshOutputs(projectId);
       const bundle = result?.bundle || {};
       setInfo({
@@ -214,6 +315,7 @@ export default function Outputs(props: PageProps) {
         label: "unreal bundle",
       });
     } catch (e: any) {
+      reportMutationError(e);
       setErr(String(e));
     } finally {
       setUnrealExportBusy(false);
@@ -225,11 +327,12 @@ export default function Outputs(props: PageProps) {
     try {
       setErr(null);
       setUnrealPlanBusyBundle(bundleDir);
-      const result = await apiPost(`/v1/projects/${projectId}/unreal/import-plan`, {
+      const result = await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/unreal/import-plan`, withExpectedRevision({
         bundle_dir: bundleDir,
         content_path: null,
         asset_name: null,
-      });
+      }));
+      setRevisionFromResponse(result);
       await refreshOutputs(projectId);
       const plan = result?.plan || {};
       setInfo({
@@ -238,6 +341,7 @@ export default function Outputs(props: PageProps) {
         label: "unreal import plan",
       });
     } catch (e: any) {
+      reportMutationError(e);
       setErr(String(e));
     } finally {
       setUnrealPlanBusyBundle("");
@@ -249,10 +353,11 @@ export default function Outputs(props: PageProps) {
     try {
       setErr(null);
       setUnrealImportBusyBundle(bundleDir);
-      const result = await apiPost(`/v1/projects/${projectId}/import/unreal`, {
+      const result = await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/import/unreal`, withExpectedRevision({
         bundle_dir: bundleDir,
         source_dir: null,
-      });
+      }));
+      setRevisionFromResponse(result);
       await refreshOutputs(projectId);
       const imported = result?.imported || {};
       setInfo({
@@ -261,6 +366,7 @@ export default function Outputs(props: PageProps) {
         label: "unreal return",
       });
     } catch (e: any) {
+      reportMutationError(e);
       setErr(String(e));
     } finally {
       setUnrealImportBusyBundle("");
@@ -348,7 +454,16 @@ export default function Outputs(props: PageProps) {
           </div>
           <div>
             <div className="small">Refresh</div>
-            <button className="secondary" onClick={() => projectId && refreshOutputs(projectId)}>Refresh</button>
+            <button
+              className="secondary"
+              onClick={() => {
+                if (!projectId) return;
+                if (autoRefresh) outputPolling.pollNow();
+                else void refreshOutputs(projectId).catch((e) => setErr(String(e)));
+              }}
+            >
+              Refresh
+            </button>
           </div>
         </div>
         <div className="row" style={{ gap: 12, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -413,13 +528,16 @@ export default function Outputs(props: PageProps) {
         <div className="small" style={{ marginTop: 6 }}>{selected.path}</div>
         {selected.type === "image" ? (
           <img
-            src={fileUrl(projectId, selected.path)}
+            src={fileUrl(selected.path)}
+            alt=""
             style={{ width: "100%", marginTop: 10, borderRadius: 12, border: "1px solid var(--border)" }}
           />
         ) : (
-          <video controls style={{ width: "100%", marginTop: 10, borderRadius: 12, border: "1px solid var(--border)" }}>
-            <source src={fileUrl(projectId, selected.path)} />
-          </video>
+          <RenewingVideo
+            sourceUrl={fileUrl(selected.path)}
+            controls
+            style={{ width: "100%", marginTop: 10, borderRadius: 12, border: "1px solid var(--border)" }}
+          />
         )}
       </div>
     ) : null,
@@ -483,7 +601,7 @@ export default function Outputs(props: PageProps) {
           </div>
         ) : null}
         <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          <a className="secondary" href={fileUrl(projectId, outs.latest_internal_render.video)} target="_blank" rel="noreferrer">Open latest internal video</a>
+          <a className="secondary" href={fileUrl(outs.latest_internal_render.video)} target="_blank" rel="noreferrer">Open latest internal video</a>
           <button className="secondary" onClick={() => handleArtifactPathAction("latest internal video", outs.latest_internal_render.video, "reveal")}>{desktopActionLabel("reveal", "latest internal video")}</button>
           {outs.latest_internal_render.runtime_checkpoint?.outputs?.checkpoint_json ? <button className="secondary" onClick={() => handleArtifactPathAction("checkpoint", outs.latest_internal_render.runtime_checkpoint.outputs.checkpoint_json, "reveal")}>{desktopActionLabel("reveal", "checkpoint")}</button> : null}
           <button className="secondary" onClick={() => retryInternalFromHistory(outs.latest_internal_render)}>Retry with cached frames</button>
@@ -506,7 +624,7 @@ export default function Outputs(props: PageProps) {
                 </div>
               ) : null}
               <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                <a className="secondary" href={fileUrl(projectId, entry.video)} target="_blank" rel="noreferrer">Open</a>
+                <a className="secondary" href={fileUrl(entry.video)} target="_blank" rel="noreferrer">Open</a>
                 <button className="secondary" onClick={() => handleArtifactPathAction("history video", entry.video, "reveal")}>{desktopActionLabel("reveal", "history video")}</button>
                 {entry.runtime_checkpoint?.outputs?.checkpoint_json ? <button className="secondary" onClick={() => handleArtifactPathAction("checkpoint", entry.runtime_checkpoint.outputs.checkpoint_json, "reveal")}>{desktopActionLabel("reveal", "checkpoint")}</button> : null}
                 <button className="secondary" onClick={() => retryInternalFromHistory(entry)}>Retry</button>
@@ -534,9 +652,11 @@ export default function Outputs(props: PageProps) {
                   <button className="secondary" onClick={() => handleArtifactPathAction("video", v.path, "reveal")}>{desktopActionLabel("reveal", "video")}</button>
                 </div>
               </div>
-              <video controls style={{ width: "100%", borderRadius: 12, border: "1px solid var(--border)" }}>
-                <source src={fileUrl(projectId, v.path)} />
-              </video>
+              <RenewingVideo
+                sourceUrl={fileUrl(v.path)}
+                controls
+                style={{ width: "100%", borderRadius: 12, border: "1px solid var(--border)" }}
+              />
               {renderMetadataCard(v)}
             </div>
           ))}
@@ -549,7 +669,8 @@ export default function Outputs(props: PageProps) {
             {outs.images?.map((im: any) => (
               <div key={im.path} style={{ cursor: "pointer" }} onClick={() => setSelected({ type: "image", path: im.path })}>
                 <img
-                  src={fileUrl(projectId, im.path)}
+                  src={fileUrl(im.path)}
+                  alt=""
                   style={{ width: "100%", borderRadius: 12, border: "1px solid var(--border)" }}
                 />
                 <div className="small" style={{ marginTop: 6, opacity: 0.8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -574,7 +695,7 @@ export default function Outputs(props: PageProps) {
               <div style={{ fontWeight: 800, marginBottom: 10 }}>Deforum exports</div>
               {outs.deforum_exports.map((p: any) => (
                 <div key={p.path} className="small">
-                  <a href={fileUrl(projectId, p.path)} target="_blank" rel="noreferrer">{p.path}</a>
+                  <a href={fileUrl(p.path)} target="_blank" rel="noreferrer">{p.path}</a>
                 </div>
               ))}
             </>
@@ -607,13 +728,13 @@ export default function Outputs(props: PageProps) {
                     ) : null}
                     <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 8 }}>
                       {bundle.manifest_path ? (
-                        <a className="secondary" href={fileUrl(projectId, bundle.manifest_path)} target="_blank" rel="noreferrer">Open manifest</a>
+                        <a className="secondary" href={fileUrl(bundle.manifest_path)} target="_blank" rel="noreferrer">Open manifest</a>
                       ) : null}
                       {bundle.import_plan_path ? (
-                        <a className="secondary" href={fileUrl(projectId, bundle.import_plan_path)} target="_blank" rel="noreferrer">Open import plan</a>
+                        <a className="secondary" href={fileUrl(bundle.import_plan_path)} target="_blank" rel="noreferrer">Open import plan</a>
                       ) : null}
                       {bundle.zip_path ? (
-                        <a className="secondary" href={fileUrl(projectId, bundle.zip_path)} target="_blank" rel="noreferrer">Download zip</a>
+                        <a className="secondary" href={fileUrl(bundle.zip_path)} target="_blank" rel="noreferrer">Download zip</a>
                       ) : null}
                       {bundle.bundle_dir ? (
                         <button className="secondary" onClick={() => handleArtifactPathAction("unreal bundle", bundle.bundle_dir, "reveal")}>
@@ -717,6 +838,17 @@ export default function Outputs(props: PageProps) {
   return (
     <div>
       <h1>Outputs</h1>
+      <ProjectRevisionConflict
+        conflict={revisionConflict}
+        onReload={async () => {
+          if (!projectId) return;
+          setErr(null);
+          await Promise.all([
+            refreshProjectRevision(projectId),
+            refreshOutputs(projectId),
+          ]);
+        }}
+      />
       <div className="small" style={{ marginTop: 6 }}>
         Reorder or hide Outputs sections for your own review flow. This only changes the local page layout and leaves artifact actions, retries, and queue behavior untouched.
       </div>

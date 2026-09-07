@@ -1,6 +1,22 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, apiUpload, buildProjectFileUrl, getBackendUrl } from "../components/api";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  apiGet,
+  apiPost,
+  apiUpload,
+  getBackendUrl,
+  type ApiError,
+  type ApiRequestOptions,
+  type SignedProjectMediaRequest,
+} from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
+import {
+  expectedRevisionBody,
+  ProjectRevisionConflict,
+  projectRevision,
+  projectRevisionFromResponse,
+  revisionConflictFrom,
+} from "../components/ProjectRevisionConflict";
+import { RenewingVideo } from "../components/RenewingMedia";
 import { RenderPlanPanel } from "../components/RenderPlanPanel";
 import { VisualDnaPanel } from "../components/VisualDnaPanel";
 import { OverlayStage } from "../components/OverlayStage";
@@ -28,6 +44,7 @@ import { StructuredSummary } from "../components/StructuredSummary";
 import { ProjectJobsPanel } from "../shared/jobs/ProjectJobsPanel";
 import { useProjectJobs } from "../shared/jobs/useProjectJobs";
 import { isJobActive, type StudioJob } from "../shared/jobs/jobStatus";
+import { useSignedProjectMedia } from "../hooks/useSignedProjectMedia";
 import type { PageProps } from "../types/pageProps";
 
 type CatalogEntry = {
@@ -286,7 +303,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
 
   const [selectedLayerIdxs, setSelectedLayerIdxs] = useState<number[]>([]);
   const [editMaskMode, setEditMaskMode] = useState<boolean>(false);
-  const [editorBgUrl, setEditorBgUrl] = useState<string | null>(null);
+  const [editorBgPath, setEditorBgPath] = useState<string>("");
 
   const [editorTimeS, setEditorTimeS] = useState<number>(0);
   const [autoKey, setAutoKey] = useState<boolean>(true);
@@ -421,11 +438,32 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   const [info, setInfo] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
   const [latestVideoMissing, setLatestVideoMissing] = useState<boolean>(false);
+  const [revisionConflict, setRevisionConflict] = useState<ApiError | null>(null);
+  const projectRevisionRef = useRef<number | null>(null);
 
   const latestInternalVideoPath = String(project?.meta?.last_internal_render?.video || "");
-  const latestInternalVideoUrl = latestInternalVideoPath
-    ? buildProjectFileUrl(backendUrl, projectId, latestInternalVideoPath)
-    : "";
+  const signedMediaPaths = Array.from(new Set(
+    [
+      latestInternalVideoPath,
+      sourceAsset,
+      stillMaskAsset,
+      editorBgPath,
+      ...controlnetUnits.map((unit) => unit.reference_asset),
+      ...(Array.isArray(project?.meta?.exports?.deforum) ? project.meta.exports.deforum : []),
+      ...(Array.isArray(project?.meta?.exports?.comfyui) ? project.meta.exports.comfyui : []),
+    ]
+      .map((path) => String(path || "").trim().replace(/\\/g, "/"))
+      .filter(Boolean),
+  ));
+  const signedMediaRequests: SignedProjectMediaRequest[] = signedMediaPaths
+    .map((path) => ({ purpose: "file", path }));
+  const signedMedia = useSignedProjectMedia(projectId || "", signedMediaRequests, backendUrl);
+  const fileUrl = (_pid: string, rel: string) => {
+    const path = String(rel || "").trim().replace(/\\/g, "/");
+    return path ? signedMedia.urlFor({ purpose: "file", path }) : "";
+  };
+  const latestInternalVideoUrl = fileUrl(projectId, latestInternalVideoPath);
+  const editorBgUrl = fileUrl(projectId, editorBgPath);
   const effectiveInternalTemporalMode = internalMotionStrategy === "storyboard_full_motion" ? "video_model" : internalTemporalMode;
 
   useEffect(() => {
@@ -860,6 +898,8 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (!id) return;
     const d = await apiGet(`/v1/projects/${id}`);
     setProject(d.project);
+    projectRevisionRef.current = projectRevision(d.project);
+    setRevisionConflict(null);
     setVisualDnaHints(d.visual_dna_hints || null);
     setAnalysis(d.project?.meta?.analysis || null);
     setPlan(d.project?.meta?.last_plan || null);
@@ -868,6 +908,51 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     const storedPlan = d.project?.meta?.last_conductor_plan;
     if (storedPlan && typeof storedPlan === "object") {
       setConductorPlan(storedPlan);
+    }
+  };
+
+  const recordMutationResponse = (response: any) => {
+    const revision = projectRevisionFromResponse(response);
+    if (revision != null) {
+      projectRevisionRef.current = revision;
+      setProject((current: any) => current && typeof current === "object"
+        ? { ...current, revision }
+        : current);
+    }
+    return response;
+  };
+
+  const postProjectMutation = async (
+    path: string,
+    body: Record<string, unknown>,
+    options: ApiRequestOptions = {},
+  ) => {
+    try {
+      const response = await apiPost(
+        path,
+        expectedRevisionBody(body, { revision: projectRevisionRef.current }),
+        options,
+      );
+      setRevisionConflict(null);
+      return recordMutationResponse(response);
+    } catch (error) {
+      const conflict = revisionConflictFrom(error);
+      if (conflict) setRevisionConflict(conflict);
+      throw error;
+    }
+  };
+
+  const uploadProjectAsset = async (path: string, file: File) => {
+    try {
+      const response = await apiUpload(path, file, {
+        expectedRevision: projectRevisionRef.current ?? undefined,
+      });
+      setRevisionConflict(null);
+      return recordMutationResponse(response);
+    } catch (error) {
+      const conflict = revisionConflictFrom(error);
+      if (conflict) setRevisionConflict(conflict);
+      throw error;
     }
   };
 
@@ -923,7 +1008,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       return;
     }
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/conductor/plan`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/conductor/plan`, {
         ...orchestratorIntent,
         variant_index: selectedVariant,
         preset: renderPreset,
@@ -973,7 +1058,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setPlanningPerformer(true);
     setPerformerStatus("");
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/performer/plan`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/performer/plan`, {
         variant_index: selectedVariant,
       });
       setPerformerPlan(d?.performer_plan || null);
@@ -995,7 +1080,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setPerformerStatus("");
     setErr(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/performer/run`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/performer/run`, {
         variant_index: selectedVariant,
         plan_id: performerPlan.plan_id,
         provider: "auto",
@@ -1061,11 +1146,13 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
   }, [loraModels, loraToAdd]);
 
   useEffect(() => {
+    projectRevisionRef.current = null;
+    setRevisionConflict(null);
     if (projectId) {
       refreshProject(projectId).catch(() => {});
       refreshReferenceAssets(projectId).catch(() => {});
     }
-  }, [projectId]);
+  }, [backendUrl, projectId]);
 
   useEffect(() => {
     refreshMotionSequencer().catch(() => {});
@@ -1157,7 +1244,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setTrtPreviewLoading(true);
     const debounceTimer = setTimeout(async () => {
       try {
-        const d = await apiPost(`/v1/projects/${projectId}/render/tensorrt-standalone/preview`, {
+        const d = await postProjectMutation(`/v1/projects/${projectId}/render/tensorrt-standalone/preview`, {
           variant_index: selectedVariant,
           model_id: selectedStillModelId,
           width: Number(renderWidth) || 1024,
@@ -1236,7 +1323,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/pipeline/run?variant_index=${selectedVariant}&preset=${renderPreset}&mode=auto`, {});
+      const d = await postProjectMutation(`/v1/projects/${projectId}/pipeline/run?variant_index=${selectedVariant}&preset=${renderPreset}&mode=auto`, {});
       setInfo(d);
       await refreshProject(projectId);
     } catch (e: any) {
@@ -1252,7 +1339,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       return;
     }
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/internal/video`, buildInternalPayload());
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/internal/video`, buildInternalPayload());
       setInfo(d);
       await refreshProject(projectId);
       await refreshProjectJobs();
@@ -1268,7 +1355,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setCodexReview(null);
     setCodexBusy(true);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/codex/render-review`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/codex/render-review`, {
         variant_index: selectedVariant,
       });
       setCodexReview(d);
@@ -1284,7 +1371,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setMotionSequencerBusy(true);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/motion_sequencer/apply`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/motion_sequencer/apply`, {
         variant_index: selectedVariant,
         fps: internalFpsOut || 24,
         activate: true,
@@ -1339,7 +1426,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setInfo(null);
     setAutoBusy(true);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/auto`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/auto`, {
         preset: autoPreset,
         engine: autoEngine,
         variant_index: selectedVariant,
@@ -1365,7 +1452,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       let d: any;
       if (autoNeedsMasks) {
         // Masked / regional object presets need explicit masks -> layered endpoint.
-        d = await apiPost(`/v1/projects/${projectId}/render/animate_layers`, {
+        d = await postProjectMutation(`/v1/projects/${projectId}/render/animate_layers`, {
           source_asset: autoSourceAsset,
           mode: "masked",
           motion: selectedAutoPreset?.motion || "full_3d",
@@ -1373,7 +1460,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
           fps: autoFps,
         });
       } else {
-        d = await apiPost(`/v1/projects/${projectId}/render/auto`, {
+        d = await postProjectMutation(`/v1/projects/${projectId}/render/auto`, {
           preset: autoPreset,
           engine: autoEngine,
           variant_index: selectedVariant,
@@ -1399,7 +1486,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setInfo(null);
     setLayeredBusy(true);
     try {
-      const result = await apiPost(`/v1/projects/${projectId}/render/animate_layers`, payload);
+      const result = await postProjectMutation(`/v1/projects/${projectId}/render/animate_layers`, payload);
       setInfo(result);
       await refreshProject(projectId);
       await refreshProjectJobs();
@@ -1444,7 +1531,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (!projectId || !latestInternalJob?.id) return;
     setErr(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/clear_cached_frames`, {});
+      const d = await postProjectMutation(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/clear_cached_frames`, {});
       setInfo(d);
       await refreshProject(projectId);
       await refreshProjectJobs();
@@ -1458,7 +1545,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (!projectId || !latestInternalJob?.id) return;
     setErr(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/drop_checkpoint`, {});
+      const d = await postProjectMutation(`/v1/projects/${projectId}/jobs/${latestInternalJob.id}/drop_checkpoint`, {});
       setInfo(d);
       await refreshProject(projectId);
       await refreshProjectJobs();
@@ -1604,7 +1691,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/stills/scenes`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/stills/scenes`, {
         variant_index: selectedVariant,
         model_id: selectedStillModel?.id || undefined,
         checkpoint: checkpointName || undefined,
@@ -1622,7 +1709,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/firefly/scenes`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/firefly/scenes`, {
         variant_index: selectedVariant,
         model_id: renderProviders?.firefly?.custom_model_id || undefined,
         width: renderWidth || undefined,
@@ -1641,7 +1728,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/imagineart/scenes`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/imagineart/scenes`, {
         variant_index: selectedVariant,
         width: renderWidth || undefined,
         height: renderHeight || undefined,
@@ -1659,7 +1746,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/imagineart/video`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/imagineart/video`, {
         variant_index: selectedVariant,
         scene_index: sceneIndex,
         use_keyframe: useKeyframe,
@@ -1676,7 +1763,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setInfo(null);
     try {
       const engine = renderMode === "motion_svd" ? "svd" : "animatediff";
-      const d = await apiPost(`/v1/projects/${projectId}/render/comfyui/motion_scenes`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/comfyui/motion_scenes`, {
         model_id: selectedMotionModel?.id || undefined,
         svd_model_id: renderMode === "motion_svd" ? selectedSvdModel?.id || undefined : undefined,
         checkpoint: checkpointName || undefined,
@@ -1699,7 +1786,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/video/smart`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/video/smart`, {
         variant_index: selectedVariant,
         preset: renderPreset,
         route: forceRoute,
@@ -1716,7 +1803,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/cosmos/scene`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/cosmos/scene`, {
         variant_index: selectedVariant,
         scene_index: sceneIndex,
         use_keyframe: useKeyframe,
@@ -1733,7 +1820,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/cosmos/all_scenes`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/cosmos/all_scenes`, {
         variant_index: selectedVariant,
         use_keyframe: useKeyframe,
         seed: renderSeed ? Number(renderSeed) : undefined,
@@ -1749,7 +1836,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/azure_foundry/scene`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/azure_foundry/scene`, {
         variant_index: selectedVariant,
         scene_index: sceneIndex,
         use_keyframe: useKeyframe,
@@ -1766,7 +1853,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/azure_foundry/all_scenes`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/azure_foundry/all_scenes`, {
         variant_index: selectedVariant,
         use_keyframe: useKeyframe,
         seed: renderSeed ? Number(renderSeed) : undefined,
@@ -1782,7 +1869,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/firefly/assemble`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/firefly/assemble`, {
         variant_index: selectedVariant,
         fps: internalFpsOut,
       });
@@ -1797,7 +1884,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/imagineart/assemble`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/imagineart/assemble`, {
         variant_index: selectedVariant,
         fps: internalFpsOut,
       });
@@ -1812,7 +1899,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/assemble_video`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/assemble_video`, {
         variant_index: selectedVariant,
         fps: internalFpsOut,
       });
@@ -1828,7 +1915,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/render/tensorrt-standalone`, {
+      const d = await postProjectMutation(`/v1/projects/${projectId}/render/tensorrt-standalone`, {
         variant_index: selectedVariant,
         model_id: selectedStillModelId,
         width: Number(renderWidth) || 1024,
@@ -1873,7 +1960,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     setErr(null);
     setInfo(null);
     try {
-      const d = await apiPost(`/v1/projects/${projectId}/export/deforum`, { variant_index: selectedVariant, fps: 30 });
+      const d = await postProjectMutation(`/v1/projects/${projectId}/export/deforum`, { variant_index: selectedVariant, fps: 30 });
       setInfo(d);
       await refreshProject(projectId);
     } catch (e: any) {
@@ -1954,7 +2041,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (!referenceUploadFile || !projectId) return;
     setErr(null);
     try {
-      await apiUpload(`/v1/projects/${projectId}/assets/refs`, referenceUploadFile);
+      await uploadProjectAsset(`/v1/projects/${projectId}/assets/refs`, referenceUploadFile);
       setReferenceUploadFile(null);
       await refreshReferenceAssets(projectId);
       await refreshProject(projectId);
@@ -1967,7 +2054,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     if (!workflowMaskUploadFile || !projectId) return;
     setErr(null);
     try {
-      await apiUpload(`/v1/projects/${projectId}/assets/mask`, workflowMaskUploadFile);
+      await uploadProjectAsset(`/v1/projects/${projectId}/assets/mask`, workflowMaskUploadFile);
       setWorkflowMaskUploadFile(null);
       await refreshProject(projectId);
     } catch (e: any) {
@@ -1981,15 +2068,14 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
       setErr(null);
       const d = await apiGet(`/v1/projects/${projectId}/outputs`);
       const imgs: string[] = (d?.images || []).map((x: any) => x.path || x).filter(Boolean);
-      if (!imgs.length) { setEditorBgUrl(null); return; }
+      if (!imgs.length) { setEditorBgPath(""); return; }
       const last = imgs[0];
-      setEditorBgUrl(fileUrl(projectId, last));
+      setEditorBgPath(last);
     } catch (e: any) {
       setErr(String(e));
     }
   };
 
-const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pid, rel);
   const sourceAssetPreviewUrl = sourceAsset ? fileUrl(projectId, sourceAsset) : "";
   const maskAssetPreviewUrl = stillMaskAsset ? fileUrl(projectId, stillMaskAsset) : "";
   const deforumExports = project?.meta?.exports?.deforum || [];
@@ -2160,6 +2246,10 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
   return (
     <div>
       <h1>Render</h1>
+      <ProjectRevisionConflict
+        conflict={revisionConflict}
+        onReload={() => refreshProject(projectId)}
+      />
       <RenderControlCenter
         goal={quickRenderGoal}
         onGoalChange={applyQuickRenderGoal}
@@ -2926,10 +3016,10 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                             <a className="secondary" href={latestInternalVideoUrl} download>Download video</a>
                             <button className="secondary" onClick={() => { applyLatestInternalSettings(); setInternalResumeExisting(true); }}>Reuse settings + resume caches</button>
                           </div>
-                          <video
+                          <RenewingVideo
                             controls
                             style={{ width: "100%", maxWidth: 640, marginTop: 10 }}
-                            src={latestInternalVideoUrl}
+                            sourceUrl={latestInternalVideoUrl}
                             onError={() => setLatestVideoMissing(true)}
                           />
                         </>
@@ -3173,7 +3263,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                        <button className="secondary" disabled={!maskFile} onClick={async () => {
                          try {
                            if (!maskFile) return;
-                           await apiUpload(`/v1/projects/${projectId}/assets/mask`, maskFile);
+                           await uploadProjectAsset(`/v1/projects/${projectId}/assets/mask`, maskFile);
                            await refreshProject(projectId);
                            setMaskFile(null);
                          } catch (e: any) { setErr(String(e)); }
@@ -3186,7 +3276,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                        onClick={async () => {
                          try {
                            setErr(null);
-                           const up = await apiUpload(`/v1/projects/${projectId}/assets/overlay`, overlayFile!);
+                           const up = await uploadProjectAsset(`/v1/projects/${projectId}/assets/overlay`, overlayFile!);
                            const duration = (plan?.variants?.[selectedVariant]?.scenes?.slice(-1)?.[0]?.end_s) ?? 60;
                            const next = {
                              ...timeline,
@@ -3195,7 +3285,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                                { type: "image", asset: up.asset, start_s: 0, end_s: Number(duration), x: 20, y: 20, w: 220, h: 220, opacity: 0.9, blend_mode: "normal", mask_asset: "", mask_invert: false, mask_feather_px: 0, keyframes: [], z: 10 }
                              ]
                            };
-                           const saved = await apiPost(`/v1/projects/${projectId}/timeline`, { timeline: next });
+                           const saved = await postProjectMutation(`/v1/projects/${projectId}/timeline`, { timeline: next });
                            setTimeline(saved.timeline);
                            await refreshProject(projectId);
                          } catch (e: any) {
@@ -3223,7 +3313,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                                { type: "text", text: overlayText, start_s: 0, end_s: Number(duration), x: 24, y: 24, size: 34, color: "#ffffff", stroke_color: "#000000", stroke_width: 2, opacity: 1.0, z: 20 }
                              ]
                            };
-                           const saved = await apiPost(`/v1/projects/${projectId}/timeline`, { timeline: next });
+                           const saved = await postProjectMutation(`/v1/projects/${projectId}/timeline`, { timeline: next });
                            setTimeline(saved.timeline);
                            await refreshProject(projectId);
                            setOverlayText("");
@@ -3290,7 +3380,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
 
                      <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
                        <button className="secondary" onClick={loadEditorBackground} disabled={!projectId}>Use latest output as background</button>
-                       <button className="secondary" onClick={() => setEditorBgUrl(null)}>Clear background</button>
+                       <button className="secondary" onClick={() => setEditorBgPath("")}>Clear background</button>
                        {singleLayerIdx != null ? (
                          <>
                            <button className="secondary" onClick={() => {
@@ -3426,7 +3516,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                                  className="secondary"
                                  onClick={async () => {
                                    const next = { ...timeline, layers: (timeline.layers || []).filter((_: any, i: number) => i !== idx) };
-                                   const saved = await apiPost(`/v1/projects/${projectId}/timeline`, { timeline: next });
+                                   const saved = await postProjectMutation(`/v1/projects/${projectId}/timeline`, { timeline: next });
                                    setTimeline(saved.timeline);
                                    setTimelineDirty(false);
                                    await refreshProject(projectId);
@@ -3522,7 +3612,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
 
                   <button className="primary" disabled={!timelineDirty} onClick={async () => {
                     try {
-                      const saved = await apiPost(`/v1/projects/${projectId}/timeline`, { timeline });
+                      const saved = await postProjectMutation(`/v1/projects/${projectId}/timeline`, { timeline });
                       setTimeline(saved.timeline);
                       setTimelineDirty(false);
                       await refreshProject(projectId);
@@ -3787,7 +3877,7 @@ const fileUrl = (pid: string, rel: string) => buildProjectFileUrl(backendUrl, pi
                         <button
                           className="secondary"
                           disabled={!sourceAsset || !projectId}
-                          onClick={() => setEditorBgUrl(sourceAsset ? fileUrl(projectId, sourceAsset) : null)}
+                          onClick={() => setEditorBgPath(sourceAsset || "")}
                         >
                           Use source as stage background
                         </button>

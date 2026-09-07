@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { buildProjectFileUrl } from "./api";
+import type { SignedProjectMediaRequest } from "./api";
+import { useSignedProjectMedia } from "../hooks/useSignedProjectMedia";
 
 type AnyDict = Record<string, any>;
 
@@ -392,8 +393,16 @@ export function OverlayStage(props: {
   const layers: AnyDict[] = useMemo(() => (timeline?.layers || []).map(ensureLayerBox), [timeline]);
   const selectedSet = useMemo(() => new Set<number>(selectedIndices || []), [selectedIndices]);
   const primaryIndex = selectedIndices?.length ? selectedIndices[selectedIndices.length - 1] : null;
-
-  const fileUrl = (rel: string) => buildProjectFileUrl(backendUrl, projectId, rel);
+  const mediaRequests = useMemo<SignedProjectMediaRequest[]>(() => {
+    const paths = new Set<string>();
+    for (const layer of layers) {
+      if (layer?.type === "image" && layer.asset) paths.add(`assets/overlays/${layer.asset}`);
+      if (layer?.mask_asset) paths.add(`assets/masks/${layer.mask_asset}`);
+    }
+    return [...paths].map((path) => ({ purpose: "file", path }));
+  }, [layers]);
+  const signedMedia = useSignedProjectMedia(projectId, mediaRequests, backendUrl);
+  const fileUrl = (rel: string) => signedMedia.urlFor({ purpose: "file", path: rel });
 
   useEffect(() => {
     const el = stageRef.current;
@@ -1161,6 +1170,7 @@ export function OverlayStage(props: {
         {backgroundUrl ? (
           <img
             src={backgroundUrl}
+            alt=""
             style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: 0.95 }}
           />
         ) : null}
@@ -1220,6 +1230,7 @@ export function OverlayStage(props: {
                 l.asset ? (
                   <img
                     src={fileUrl(`assets/overlays/${l.asset}`)}
+                    alt=""
                     style={{ width: "100%", height: "100%", objectFit: "contain" }}
                     draggable={false}
                   />
@@ -1314,6 +1325,7 @@ export function OverlayStage(props: {
               >
                 <img
                   src={fileUrl(`assets/masks/${primary.mask_asset}`)}
+                  alt=""
                   style={{ width: "100%", height: "100%", objectFit: "contain", opacity: 0.35, mixBlendMode: "screen" }}
                   draggable={false}
                 />

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using EdmgStudio.Core.Models;
+using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -222,7 +223,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
                 cancellationToken);
             _pendingReferencePath = null;
             PendingReferenceText.Text = "No local reference selected.";
-            await LoadOptionalWorkspaceDataAsync(projectId, cancellationToken);
+            await LoadSelectedProjectAsync(projectId, cancellationToken);
             ShowStatus(
                 "Reference uploaded",
                 $"{Path.GetFileName(path)} is now available to the project.",
@@ -287,13 +288,15 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
                 NullIfWhiteSpace(PlanNotesTextBox.Text),
                 null,
                 NumberOfVariants: 3,
-                MaximumScenes: 12);
+                MaximumScenes: 12,
+                ExpectedRevision: StudioPageHelpers.ExpectedRevision(_projectResponse?.Project));
 
             _generatedPlan = await App.Services.ApiClient.GeneratePlanAsync(
                 projectId,
                 request,
                 mode,
                 cancellationToken);
+            await RefreshProjectSnapshotAsync(projectId, cancellationToken);
             SynchronizeVariantSelection();
             PopulatePlanning();
             SetLastOperationJson(_generatedPlan);
@@ -344,7 +347,9 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
                 projectId,
                 _session.SelectedVariantIndex,
                 overwrite,
+                StudioPageHelpers.ExpectedRevision(_projectResponse?.Project),
                 cancellationToken);
+            await RefreshProjectSnapshotAsync(projectId, cancellationToken);
             SetLastOperationJson(response);
             ShowStatus(
                 "Timeline updated",
@@ -387,7 +392,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             ProjectCollectResponse response =
                 await App.Services.ApiClient.CollectProjectAsync(projectId, cancellationToken);
             SetLastOperationJson(response);
-            await LoadOptionalWorkspaceDataAsync(projectId, cancellationToken);
+            await LoadSelectedProjectAsync(projectId, cancellationToken);
             ShowStatus(
                 "Project collection complete",
                 $"{response.CopiedCount} assets copied; {response.SkippedCount} skipped.",
@@ -486,6 +491,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
                     projectId,
                     package,
                     TemplateMergeCheckBox.IsChecked == true,
+                    StudioPageHelpers.ExpectedRevision(_projectResponse?.Project),
                     cancellationToken);
             _generatedPlan = null;
             await LoadSelectedProjectAsync(projectId, cancellationToken);
@@ -540,6 +546,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
                 projectId,
                 _session.SelectedVariantIndex,
                 reordered,
+                StudioPageHelpers.ExpectedRevision(_projectResponse?.Project),
                 cancellationToken);
             SetLastOperationJson(response);
             _generatedPlan = null;
@@ -573,6 +580,18 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         _projectResponse = project;
         PopulateProject();
         await LoadOptionalWorkspaceDataAsync(projectId, cancellationToken, loadVersion);
+    }
+
+    private async Task RefreshProjectSnapshotAsync(string projectId, CancellationToken cancellationToken)
+    {
+        ProjectResponse response = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        if (_session.ActiveProjectId != projectId)
+        {
+            return;
+        }
+
+        _projectResponse = response;
+        PopulateProject();
     }
 
     private async Task LoadOptionalWorkspaceDataAsync(
@@ -915,6 +934,14 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         catch (OperationCanceledException) when (_operationCts.IsCancellationRequested)
         {
         }
+        catch (ProjectRevisionConflictException conflict)
+        {
+            await HandleProjectRevisionConflictAsync(conflict, _operationCts.Token);
+        }
+        catch (StudioApiException exception)
+        {
+            ShowStatus($"{operation} failed", exception.UserFacingMessage, InfoBarSeverity.Error);
+        }
         catch (Exception exception)
         {
             ShowStatus($"{operation} failed", exception.Message, InfoBarSeverity.Error);
@@ -923,6 +950,50 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         {
             WorkspaceProgressRing.IsActive = false;
             WorkspaceProgressRing.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private async Task HandleProjectRevisionConflictAsync(
+        ProjectRevisionConflictException conflict,
+        CancellationToken cancellationToken)
+    {
+        if (!await StudioPageHelpers.ConfirmReloadAfterRevisionConflictAsync(XamlRoot, conflict))
+        {
+            ShowStatus(
+                "Project reload required",
+                "The failed change was not applied. Review any local work, reload the project, then retry.",
+                InfoBarSeverity.Warning);
+            return;
+        }
+
+        if (!TryGetActiveProjectId(out string projectId))
+        {
+            return;
+        }
+
+        try
+        {
+            _generatedPlan = null;
+            await LoadSelectedProjectAsync(projectId, cancellationToken);
+            ShowStatus(
+                "Project reloaded",
+                "The latest revision is loaded. Review the current project, then retry your change.",
+                InfoBarSeverity.Informational);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (StudioApiException reloadError)
+        {
+            ShowStatus("Reload failed", reloadError.UserFacingMessage, InfoBarSeverity.Error);
+        }
+        catch (HttpRequestException reloadError)
+        {
+            ShowStatus("Reload failed", reloadError.Message, InfoBarSeverity.Error);
+        }
+        catch (JsonException reloadError)
+        {
+            ShowStatus("Reload failed", reloadError.Message, InfoBarSeverity.Error);
         }
     }
 

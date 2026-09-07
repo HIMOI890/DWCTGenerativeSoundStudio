@@ -1,6 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
-import { apiGet, apiPost, apiUpload, getBackendUrl } from "../components/api";
+import {
+  apiGet,
+  apiPost,
+  apiUpload,
+  getBackendUrl,
+  type ApiError,
+  type SignedProjectMediaRequest,
+} from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
+import {
+  ProjectRevisionConflictNotice,
+  expectedRevisionBody,
+  revisionConflictFrom,
+  responseRevision,
+} from "../components/ProjectRevisionConflict";
 import UnderstandPanel from "../components/UnderstandPanel";
 import { VisualDnaPanel } from "../components/VisualDnaPanel";
 import { hasProjectId, resolveProjectId } from "../components/projectSelection";
@@ -9,6 +22,7 @@ import { useOperationProgress } from "../components/useOperationProgress";
 import { useStudioSession } from "../components/studioSession";
 import { useUiMode } from "../components/uiMode";
 import { StructuredSummary } from "../components/StructuredSummary";
+import { useSignedProjectMedia } from "../hooks/useSignedProjectMedia";
 import type { PageProps } from "../types/pageProps";
 import AiNlpWorkbench from "../workbenches/AiNlpWorkbench";
 import AudioReactiveWorkbench from "../workbenches/AudioReactiveWorkbench";
@@ -218,6 +232,8 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
 
   const [info, setInfo] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [revisionConflict, setRevisionConflict] = useState<ApiError | null>(null);
+  const [revisionReloading, setRevisionReloading] = useState(false);
   const [projectHealth, setProjectHealth] = useState<any>(null);
   const [musicGraph, setMusicGraph] = useState<any>(null);
   const [liveCues, setLiveCues] = useState<any>(null);
@@ -226,6 +242,19 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
   const previewAutoFitKeyRef = useRef<string>("");
   const { progress, runOperation } = useOperationProgress();
   const projectId = projectsReady && hasProjectId(projects, sessionProjectId) ? sessionProjectId : "";
+  const currentRevision = Number.isInteger(Number(project?.revision)) ? Number(project.revision) : null;
+  const setRevisionFromResponse = (response: unknown) => {
+    const revision = responseRevision(response, currentRevision);
+    if (revision == null || revision === currentRevision) return;
+    setProject((current: any) => current && typeof current === "object"
+      ? { ...current, revision }
+      : current);
+  };
+  const reportMutationError = (error: unknown) => {
+    const conflict = revisionConflictFrom(error);
+    if (conflict) setRevisionConflict(conflict);
+    setErr(conflict ? "Project changed elsewhere. Reload the project before retrying." : String(error));
+  };
 
   const refreshProjects = async () => {
     const d = await apiGet("/v1/projects");
@@ -288,7 +317,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
     }
   };
 
-  useEffect(() => { refreshProjects().catch(() => {}); }, []);
+  useEffect(() => { refreshProjects().catch(() => {}); }, [backendUrl]);
 
   useEffect(() => {
     if (!projectsReady) return;
@@ -303,7 +332,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
       setLiveCues(null);
       setLiveAssets(null);
     }
-  }, [projectId, projectsReady]);
+  }, [backendUrl, projectId, projectsReady]);
   // Workspace stays focused on project + timeline. Rendering lives in the Render page.
 
   const uploadAudio = async () => {
@@ -317,12 +346,14 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
           successDetail: "Track uploaded and project refreshed.",
         },
         async () => {
-          await apiUpload(`/v1/projects/${projectId}/assets/audio`, audioFile);
+          await apiUpload(`/v1/projects/${projectId}/assets/audio`, audioFile, {
+            expectedRevision: currentRevision,
+          });
           await refreshProject(projectId);
         },
       );
     } catch (e: any) {
-      setErr(String(e));
+      reportMutationError(e);
     }
   };
 
@@ -337,13 +368,15 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
           successDetail: "Reference image saved to the current project.",
         },
         async () => {
-          await apiUpload(`/v1/projects/${projectId}/assets/refs`, refFile);
+          await apiUpload(`/v1/projects/${projectId}/assets/refs`, refFile, {
+            expectedRevision: currentRevision,
+          });
           setRefFile(null);
           await refreshProject(projectId);
         },
       );
     } catch (e: any) {
-      setErr(String(e));
+      reportMutationError(e);
     }
   };
 
@@ -358,14 +391,24 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
         },
         async () => {
           if (audioFile) {
-            await apiUpload(`/v1/projects/${projectId}/assets/audio`, audioFile);
+            const upload = await apiUpload(`/v1/projects/${projectId}/assets/audio`, audioFile, {
+              expectedRevision: currentRevision,
+            });
+            const nextRevision = responseRevision(upload, currentRevision);
+            return apiPost(
+              `/v1/projects/${projectId}/analyze_audio`,
+              expectedRevisionBody({}, { revision: nextRevision }),
+            );
           }
-          return apiPost(`/v1/projects/${projectId}/analyze_audio`, {});
+          return apiPost(
+            `/v1/projects/${projectId}/analyze_audio`,
+            expectedRevisionBody({}, project),
+          );
         },
       );
       setAnalysis(d?.analysis || d?.project?.meta?.analysis || null);
       await refreshProject(projectId);
-    } catch (e: any) { setErr(String(e)); }
+    } catch (e: any) { reportMutationError(e); }
   };
 
   const generatePlan = async () => {
@@ -382,13 +425,14 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
             title: project?.name || "Untitled",
             style_prefs: "cinematic, coherent subject, high detail, consistent style",
             num_variants: 3,
-            max_scenes: 12
+            max_scenes: 12,
+            ...(currentRevision != null ? { expected_revision: currentRevision } : {}),
           }),
       );
       setPlan(d);
       setSelectedVariant(0);
       await refreshProject(projectId);
-    } catch (e: any) { setErr(String(e)); }
+    } catch (e: any) { reportMutationError(e); }
   };
 
   const [templatePackagePreview, setTemplatePackagePreview] = useState<any>(null);
@@ -411,18 +455,16 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
     setErr(null);
     try {
       const parsed = JSON.parse(templateImportText);
-      const d = await apiPost(`/v1/projects/${projectId}/template_package/import`, {
+      const d = await apiPost(`/v1/projects/${projectId}/template_package/import`, expectedRevisionBody({
         package: parsed,
         merge: true,
-      });
+      }, project));
       setInfo(d?.applied || d);
       await refreshProject(projectId);
     } catch (e: any) {
-      setErr(String(e));
+      reportMutationError(e);
     }
   };
-
-  const fileUrl = (pid: string, rel: string) => `${backendUrl}/v1/projects/${pid}/file?path=${encodeURIComponent(rel)}`;
 
   const variantScenes = plan?.variants?.[selectedVariant]?.scenes || [];
   const analysisFeatures = analysis?.features || {};
@@ -435,6 +477,12 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
   const analysisBpm = Number(analysisFeatures?.bpm || analysisFeatures?.tempo_bpm || analysisFeatures?.tempo || 0);
   const durationS = analysis?.features?.duration_s || analysis?.features?.duration || plan?.duration_s || 0;
   const refAssets = Array.isArray(assets?.refs) ? assets.refs : [];
+  const referenceRequests: SignedProjectMediaRequest[] = refAssets
+    .map((asset: any) => String(asset?.path || "").trim())
+    .filter(Boolean)
+    .map((path: string) => ({ purpose: "file", path }));
+  const signedReferences = useSignedProjectMedia(projectId, referenceRequests, backendUrl);
+  const referenceUrl = (path: string) => signedReferences.urlFor({ purpose: "file", path });
   const variantCount = Array.isArray(plan?.variants) ? plan.variants.length : 0;
   const selectedVariantName =
     plan?.variants?.[selectedVariant]?.name || (variantCount ? `Variant ${selectedVariant + 1}` : "none");
@@ -475,15 +523,15 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
           successDetail: "Timeline updated from the selected storyboard variant.",
         },
         () =>
-          apiPost(`/v1/projects/${projectId}/timeline/apply_plan`, {
+          apiPost(`/v1/projects/${projectId}/timeline/apply_plan`, expectedRevisionBody({
             variant_index: selectedVariant,
             overwrite,
-          }),
+          }, project)),
       );
       await refreshProject(projectId);
       setWorkspaceView("storyboard");
     } catch (e: any) {
-      setErr(String(e));
+      reportMutationError(e);
     }
   };
 
@@ -499,15 +547,15 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
           successDetail: "Storyboard order saved to the current project variant.",
         },
         () =>
-          apiPost(`/v1/projects/${projectId}/plan/variant`, {
+          apiPost(`/v1/projects/${projectId}/plan/variant`, expectedRevisionBody({
             variant_index: selectedVariant,
             scenes: resequencedScenes,
-          }),
+          }, project)),
       );
       if (result?.plan) setPlan(result.plan);
       await refreshProject(projectId);
     } catch (e: any) {
-      setErr(String(e));
+      reportMutationError(e);
     }
   };
 
@@ -534,7 +582,10 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
         successDetail: "Planner handoff applied to the current session.",
       },
       async () => {
-        await apiPost(`/v1/projects/${projectId}/planner_lab/import`, payload);
+        await apiPost(
+          `/v1/projects/${projectId}/planner_lab/import`,
+          expectedRevisionBody(payload, project),
+        );
         await refreshProject(projectId);
       },
     );
@@ -557,7 +608,10 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
         successDetail: "Reactive handoff applied to the timeline.",
       },
       async () => {
-        await apiPost(`/v1/projects/${projectId}/reactive_lab/apply`, payload);
+        await apiPost(
+          `/v1/projects/${projectId}/reactive_lab/apply`,
+          expectedRevisionBody(payload, project),
+        );
         await refreshProject(projectId);
       },
     );
@@ -765,6 +819,22 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
           <div className="small workspace-headerCopy">
             Ingest, analyze, shape creative direction, and hand the session off to Timeline and Render.
           </div>
+
+          <ProjectRevisionConflictNotice
+            conflict={revisionConflict}
+            busy={revisionReloading}
+            onReload={async () => {
+              if (!projectId) return;
+              setRevisionReloading(true);
+              try {
+                await refreshProject(projectId);
+                setRevisionConflict(null);
+                setErr(null);
+              } finally {
+                setRevisionReloading(false);
+              }
+            }}
+          />
         </div>
         <div className="workspace-statusStrip">
           <div className="workspace-stat">
@@ -865,9 +935,15 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
                 disabled={!projectId}
                 onClick={() => {
                   if (!projectId) return;
-                  apiPost(`/v1/projects/${projectId}/health/collect`, {})
-                    .then((d) => setInfo({ collect: d }))
-                    .catch((e) => setErr(String(e)));
+                  apiPost(`/v1/projects/${encodeURIComponent(projectId)}/health/collect`, expectedRevisionBody({}, project))
+                    .then((d) => {
+                      setRevisionFromResponse(d);
+                      setInfo({ collect: d });
+                    })
+                    .catch((e) => {
+                      reportMutationError(e);
+                      setErr(String(e));
+                    });
                 }}
               >
                 Collect project
@@ -1135,8 +1211,8 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
             </div>
             <div className="workspace-assetsGrid">
               {refAssets.map((r: any) => (
-                <a key={r.path} href={fileUrl(projectId, r.path)} target="_blank" rel="noreferrer">
-                  <img src={fileUrl(projectId, r.path)} className="workspace-assetThumb" />
+                <a key={r.path} href={referenceUrl(r.path) || undefined} target="_blank" rel="noreferrer">
+                  <img src={referenceUrl(r.path) || undefined} className="workspace-assetThumb" />
                 </a>
               ))}
               {!refAssets.length && <div className="small">No refs yet.</div>}

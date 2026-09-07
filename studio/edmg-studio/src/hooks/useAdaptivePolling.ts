@@ -11,6 +11,7 @@ export type AdaptivePollingOptions = {
   initialDelayMs?: number;
   activeIntervalMs: number;
   idleIntervalMs: number;
+  scopeKey?: unknown;
 };
 
 export type AdaptivePollingState = {
@@ -42,6 +43,7 @@ export function useAdaptivePolling({
   initialDelayMs = 0,
   activeIntervalMs,
   idleIntervalMs,
+  scopeKey,
 }: AdaptivePollingOptions): AdaptivePollingState {
   const pollRef = useRef(poll);
   const enabledRef = useRef(enabled);
@@ -136,7 +138,7 @@ export function useAdaptivePolling({
       controllerRef.current?.abort();
       controllerRef.current = null;
     };
-  }, [clearTimer, enabled, initialDelayMs, schedule]);
+  }, [clearTimer, enabled, initialDelayMs, schedule, scopeKey]);
 
   return { isPolling, lastError, lastCompletedAt, pollNow };
 }

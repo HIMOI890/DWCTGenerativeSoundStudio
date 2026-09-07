@@ -883,8 +883,11 @@ export default function Models(props: PageProps) {
       title: "Select model file",
       filters: [{ name: "Model files", extensions: ["safetensors", "ckpt", "pt", "bin"] }]
     });
-    if (!picked) return;
-    await apiPost("/v1/models/import/local", { file_path: picked, folder: localFolder });
+    const filePath = picked?.ok && !picked.canceled
+      ? String(picked.paths?.[0] || "").trim()
+      : "";
+    if (!filePath) return;
+    await apiPost("/v1/models/import/local", { file_path: filePath, folder: localFolder });
     await refresh();
   }
 

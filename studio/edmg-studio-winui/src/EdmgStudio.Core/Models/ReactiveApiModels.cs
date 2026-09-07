@@ -40,6 +40,10 @@ public sealed class ReactiveLabApplyRequest
 
     [JsonPropertyName("overwrite_camera")]
     public bool OverwriteCamera { get; init; } = true;
+
+    [JsonPropertyName("expected_revision")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ExpectedRevision { get; init; }
 }
 
 public sealed class ReactiveLabApplyResponse

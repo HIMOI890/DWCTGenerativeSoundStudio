@@ -105,7 +105,13 @@ public sealed partial class Direct3DPreviewControl : UserControl
         }
     }
 
-    public async Task LoadVideoStreamAsync(Stream source, CancellationToken cancellationToken)
+    public Task LoadVideoStreamAsync(Stream source, CancellationToken cancellationToken)
+        => LoadVideoStreamAsync(source, knownContentLength: null, cancellationToken);
+
+    public async Task LoadVideoStreamAsync(
+        Stream source,
+        long? knownContentLength,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(source);
         CancellationTokenSource linkedCancellation = ReplaceLoadCancellation(cancellationToken);
@@ -121,7 +127,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
         try
         {
             MediaToolPaths tools = MediaToolLocator.Locate();
-            session = await VideoPlaybackSession.CreateAsync(source, tools, token).ConfigureAwait(false);
+            session = await VideoPlaybackSession.CreateAsync(source, tools, knownContentLength, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             if (generation != Volatile.Read(ref _videoGeneration))
             {

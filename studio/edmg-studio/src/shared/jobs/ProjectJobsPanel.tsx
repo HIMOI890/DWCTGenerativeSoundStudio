@@ -1,5 +1,6 @@
 import React from "react";
 import { desktopActionLabel, runDesktopArtifactAction } from "../../components/desktopArtifacts";
+import { useSignedProjectMedia } from "../../hooks/useSignedProjectMedia";
 import { JobActionButtons } from "./JobActionButtons";
 import { JobStatusChip } from "./JobStatusChip";
 import {
@@ -37,6 +38,25 @@ type ProjectJobsPanelProps = {
   description?: string;
 };
 
+function SignedOutputLink({
+  backendUrl,
+  projectId,
+  path,
+}: {
+  backendUrl: string;
+  projectId: string;
+  path: string;
+}) {
+  const request = { purpose: "file" as const, path };
+  const media = useSignedProjectMedia(projectId, [request], backendUrl);
+  const url = media.urlFor(request);
+  return url ? (
+    <a className="secondary" href={url} target="_blank" rel="noreferrer">Output</a>
+  ) : (
+    <button className="secondary" disabled title={media.error || "Preparing secure output link"}>Output</button>
+  );
+}
+
 export function ProjectJobsPanel({
   backendUrl,
   jobs,
@@ -61,9 +81,6 @@ export function ProjectJobsPanel({
   title = "Render jobs",
   description = "Pause, cancel, retry, reveal outputs, and inspect logs with the same controls as Render Queue.",
 }: ProjectJobsPanelProps) {
-  const fileUrl = (projectId: string, rel: string) =>
-    `${backendUrl}/v1/projects/${projectId}/file?path=${encodeURIComponent(rel)}`;
-
   const handleArtifactPathAction = async (label: string, value: string | null | undefined, mode: "reveal" | "open") => {
     if (!value) return;
     try {
@@ -187,7 +204,11 @@ export function ProjectJobsPanel({
                           <button className="secondary" onClick={() => void onViewLog(job)}>Log</button>
                           {videoPath ? (
                             <>
-                              <a className="secondary" href={fileUrl(job.project_id, videoPath)} target="_blank" rel="noreferrer">Output</a>
+                              <SignedOutputLink
+                                backendUrl={backendUrl}
+                                projectId={job.project_id}
+                                path={videoPath}
+                              />
                               <button
                                 className="secondary"
                                 onClick={() => void handleArtifactPathAction("output video", videoPath, "reveal")}

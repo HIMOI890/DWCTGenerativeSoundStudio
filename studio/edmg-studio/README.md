@@ -87,6 +87,11 @@ OLLAMA_SIGNIN=1 bash scripts/setup_linux_ollama.sh
 EDMG_AI_OLLAMA_MODEL=nemotron-3-ultra:cloud bash scripts/setup_linux_ollama.sh
 ```
 
+The helper now installs only checksum-pinned Ollama release archives. For an
+intentional upgrade, override both `OLLAMA_VERSION` and
+`OLLAMA_ARCHIVE_SHA256` (and `OLLAMA_ARCHIVE_URL` if you are not using the
+standard GitHub release asset name).
+
 Linux/Lightning S3 model-cache helper:
 
 ```bash

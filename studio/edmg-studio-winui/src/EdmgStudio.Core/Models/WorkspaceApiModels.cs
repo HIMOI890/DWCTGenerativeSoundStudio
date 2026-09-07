@@ -337,6 +337,10 @@ public sealed class ApplyPlanToTimelineRequest
 
     [JsonPropertyName("overwrite")]
     public bool Overwrite { get; init; }
+
+    [JsonPropertyName("expected_revision")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ExpectedRevision { get; init; }
 }
 
 public sealed class ApplyPlanToTimelineResponse
@@ -358,6 +362,10 @@ public sealed class UpdatePlanVariantRequest
 
     [JsonPropertyName("scenes")]
     public IReadOnlyList<PlanSceneDto> Scenes { get; init; } = [];
+
+    [JsonPropertyName("expected_revision")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ExpectedRevision { get; init; }
 }
 
 public sealed class UpdatePlanVariantResponse
@@ -403,6 +411,10 @@ public sealed class ImportTemplatePackageRequest
 
     [JsonPropertyName("merge")]
     public bool Merge { get; init; } = true;
+
+    [JsonPropertyName("expected_revision")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ExpectedRevision { get; init; }
 }
 
 public sealed class ImportTemplatePackageResponse
