@@ -7,6 +7,20 @@ namespace EdmgStudio.Core.Tests;
 public sealed class TimelineProjectionTests
 {
     [TestMethod]
+    public void AudioSplitAndTrim_AdvanceSourceOffsetsWithoutChangingTrackType()
+    {
+        JsonObject document = JsonNode.Parse("""{"tracks":[{"id":"audio","type":"audio","clips":[{"id":"take","start_s":1,"end_s":5,"data":{"source_in_s":2,"source_out_s":10,"speed":2}}]}]}""")!.AsObject();
+        var lane = TimelineProjection.Project(document).Single();
+        var (left, right) = TimelineProjection.Split(lane, 3);
+        Assert.AreEqual(6d, left.SourceOutSeconds);
+        Assert.AreEqual(6d, right.SourceInSeconds);
+        var trimmed = TimelineProjection.Trim(lane, 2, 4, 10);
+        Assert.AreEqual(4d, trimmed.SourceInSeconds);
+        Assert.AreEqual(8d, trimmed.SourceOutSeconds);
+        Assert.AreEqual("audio", TimelineProjection.Rebuild(document, [left, right])["tracks"]![0]!["type"]!.GetValue<string>());
+    }
+
+    [TestMethod]
     public void CrashRecovery_PrefersDirtyJournalOverNewerSnapshot()
     {
         var recovery = JsonNode.Parse(

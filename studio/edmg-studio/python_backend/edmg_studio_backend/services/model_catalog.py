@@ -3,7 +3,6 @@ from __future__ import annotations
 # Built-in curated model catalog for EDMG Studio.
 # NOTE: We intentionally do NOT bundle large weights in the installer.
 # The catalog drives the GUI "Model Manager" which downloads models on-demand.
-
 import os
 from pathlib import Path
 from typing import Any
@@ -114,6 +113,24 @@ def built_in_catalog() -> list[dict[str, Any]]:
             recommended="advanced",
             notes="Legacy higher-quality planner retained for compatibility with existing Qwen2.5 setups.",
             tags=["planning", "local", "legacy", "quality"],
+        ),
+        _entry(
+            model_id="hf_qwen3_vl_8b_director",
+            name="Qwen3-VL-8B Instruct (Internal Director)",
+            kind="transformers",
+            source="hf",
+            hf_repo_id="Qwen/Qwen3-VL-8B-Instruct",
+            hf_revision="0c351dd01ed87e9c1b53cbc748cba10e6187ff3b",
+            target={"engine": "internal", "folder": "director"},
+            license_id="apache-2.0",
+            license_url="https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct",
+            recommended="advanced",
+            notes="Optional structured Director. Full-precision weights require substantial RAM/VRAM; low-memory and quantized profiles are not yet qualified. Installation does not certify generation readiness.",
+            family="qwen3_vl",
+            tags=["internal", "director", "planning", "vision", "unverified"],
+            required_files=["config.json", "tokenizer.json", "tokenizer_config.json",
+                            "preprocessor_config.json", "video_preprocessor_config.json",
+                            "chat_template.json", "model.safetensors.index.json"],
         ),
         _entry(
             model_id="hf_sd15_internal",

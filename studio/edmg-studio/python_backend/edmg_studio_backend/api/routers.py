@@ -4,11 +4,13 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from .media import validate_timeline_media
 
 from ..domain.continuity_validation import validate_project_continuity
+from ..domain.editor_commands import execute as execute_editor_command
 from ..domain.live_assets import compile_live_assets, sample_bounded_modulation
 from ..domain.live_cues import compile_live_cues
 from ..domain.motion_grammar import apply_motion_phrases_to_timeline
@@ -382,7 +384,18 @@ def create_project_router(
         proj = store().get(project_id)
         if not proj:
             raise HTTPException(404, "Project not found")
-        proj.meta["timeline"] = req.timeline or {"layers": []}
+        timeline = req.timeline or {"layers": []}
+        validate_timeline_media(store().project_dir(project_id), timeline)
+        # Once adopted by the editor, legacy saves must participate in its history
+        # and lock validation rather than silently replacing the canonical document.
+        if proj.meta.get("editor_history"):
+            try:
+                execute_editor_command(proj.meta, {"operation_id": str(uuid4()), "action": "replace",
+                                                   "label": "Legacy timeline save", "timeline": timeline})
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        else:
+            proj.meta["timeline"] = timeline
         journal = AutosaveJournal(store().project_dir(project_id))
         journal.write_journal(
             project_id=project_id,

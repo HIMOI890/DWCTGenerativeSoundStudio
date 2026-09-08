@@ -96,9 +96,12 @@ backend API contract. CUDA interop is not implemented in this release.
 
 Image decoding uses Windows Imaging Component, applies metadata orientation and sRGB color
 management, bounds compressed input to 256 MiB, and delete-on-close spools non-seekable streams.
-Video preview is explicitly unsupported because the WinUI package does not contain a separately
-pinned and qualified video decoder. Generated video files can still be saved or revealed through
-the established output actions.
+Video preview uses FFprobe metadata and FFmpeg-decoded BGRA frames through the same
+Direct3D surface, with play/pause and seeking. Temporary video input defaults to
+512 MiB, configurable through `EDMG_STUDIO_VIDEO_SPOOL_MAX_BYTES`; known oversized
+inputs are rejected before reading, and unknown lengths are bounded during streaming.
+The current decoder is video-only (`-an`): synchronized audio playback is still a
+WinUI/Electron parity gap. Generated video files can also be saved or revealed.
 
 Decode continuations, row conversion, uploads, drawing, resizing, and `Present` run on a dedicated
 renderer worker. The UI dispatcher is used only for panel attachment/detachment and status updates.
@@ -121,6 +124,11 @@ Microsoft's current WinUI quick start describes the required Visual Studio workl
 
 Run these commands from this directory in PowerShell:
 
+`global.json` requires stable .NET 10 SDK 10.0.301 or a later 10.0 feature band;
+preview and .NET 11 SDKs are not selected. Record the resolved SDK in release evidence.
+Optional local WinUI analyzers can be enabled with `EdmgWinUIAnalyzerDirectory`;
+a normal checkout does not depend on a particular user's plugin installation.
+
 ```powershell
 dotnet restore .\EdmgStudio.WinUI.csproj -r win-x64
 dotnet build .\EdmgStudio.WinUI.csproj -p:Platform=x64 -p:Configuration=Release
@@ -136,6 +144,10 @@ dotnet build .\EdmgStudio.WinUI.slnx -p:Platform=x64
 
 Only x64 is qualified for the native preview path. Do not build or publish this project as AnyCPU,
 do not remove `Package.appxmanifest`, and do not add `WindowsPackageType=None`.
+
+The current implementation/verification ledger is
+[`docs/WINUI_PARITY_STATUS.md`](../../docs/WINUI_PARITY_STATUS.md). Core tests and a
+successful build do not establish launched-app stability or full Electron parity.
 
 The focused backend data-freshness tests live in the existing Python test suite and should be run with the repository's frozen backend environment.
 

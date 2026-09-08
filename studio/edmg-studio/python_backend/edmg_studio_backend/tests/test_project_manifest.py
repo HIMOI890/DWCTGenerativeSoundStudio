@@ -26,7 +26,7 @@ def test_validate_and_migrate_legacy_project_document() -> None:
     }
     migrated, changed, applied = migrate_project_document(legacy)
     assert changed is True
-    assert applied == [1, 2]
+    assert applied == [1, 2, 3]
     assert migrated["schema_version"] == CURRENT_SCHEMA_VERSION
     validated = validate_project_document(migrated)
     assert validated["name"] == "Legacy"

@@ -353,6 +353,10 @@ app.include_router(create_media_router(lambda: store, backend_security))
 from .api.planner_schedule import create_schedule_router
 from .domain.planner_schedule import attach_schedule_drafts
 app.include_router(create_schedule_router(lambda: store))
+from .api.editor import create_editor_router
+app.include_router(create_editor_router(lambda: store))
+from .api.director import create_director_router
+app.include_router(create_director_router(lambda: store, lambda: jobs, lambda: models))
 
 app.add_middleware(BackendSecurityMiddleware, settings=backend_security)
 
@@ -7451,7 +7455,11 @@ def _execute_job_body(job):
     jobs.append_log(job.project_id, job.id, f"Started job type={job.type}")
 
     try:
-        if job.type == "comfyui_scene":
+        if job.type == "qwen_director":
+            from .services.qwen_director import run_director_job
+            job.result = run_director_job(job.payload, models)
+            job.status = "succeeded"
+        elif job.type == "comfyui_scene":
             res = _run_comfyui_scene(job.project_id, job.id, job.payload)
             job.result = res
             job.status = "succeeded"
@@ -7654,6 +7662,15 @@ def _run_job_in_subprocess(job) -> None:
 
 def _dispatch_job(job) -> None:
     """Worker entry point: run the job in a child process when enabled."""
+    if job.type == "qwen_director":
+        # Director inference must never fall back into the API process.
+        try:
+            _run_job_in_subprocess(job)
+        except Exception as exc:
+            job.status = "failed"
+            job.error = f"Director worker could not start: {exc}"
+            jobs.save(job)
+        return
     if _job_in_subprocess_enabled():
         try:
             _run_job_in_subprocess(job)

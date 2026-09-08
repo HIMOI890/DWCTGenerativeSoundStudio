@@ -45,15 +45,14 @@ public sealed partial class Direct3DPreviewControl : UserControl
         ArgumentNullException.ThrowIfNull(source);
         CancellationTokenSource linkedCancellation = ReplaceLoadCancellation(cancellationToken);
         CancellationToken token = linkedCancellation.Token;
-        await DisposeVideoSessionAsync();
-
-        _isLoading = true;
-        _hasFrame = false;
-        await SetStateAsync("Loading preview…", isProgressActive: true, isVisible: true);
-
         OwnedCpuFrame? frame = null;
         try
         {
+            await DisposeVideoSessionAsync();
+            token.ThrowIfCancellationRequested();
+            _isLoading = true;
+            _hasFrame = false;
+            await SetStateAsync("Loading preview…", isProgressActive: true, isVisible: true);
             frame = await _decoder.DecodeAsync(source, contentType, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
 
@@ -80,12 +79,14 @@ public sealed partial class Direct3DPreviewControl : UserControl
         }
         catch (PreviewUnsupportedException exception)
         {
+            token.ThrowIfCancellationRequested();
             _isLoading = false;
             _hasFrame = false;
             await SetStateAsync(exception.Message, isProgressActive: false, isVisible: true);
         }
         catch (Exception exception)
         {
+            token.ThrowIfCancellationRequested();
             _isLoading = false;
             _hasFrame = false;
             await SetStateAsync(
@@ -96,12 +97,8 @@ public sealed partial class Direct3DPreviewControl : UserControl
         finally
         {
             frame?.Dispose();
-            if (ReferenceEquals(
-                Interlocked.CompareExchange(ref _loadCancellation, null, linkedCancellation),
-                linkedCancellation))
-            {
-                linkedCancellation.Dispose();
-            }
+            Interlocked.CompareExchange(ref _loadCancellation, null, linkedCancellation);
+            linkedCancellation.Dispose();
         }
     }
 
@@ -116,35 +113,43 @@ public sealed partial class Direct3DPreviewControl : UserControl
         ArgumentNullException.ThrowIfNull(source);
         CancellationTokenSource linkedCancellation = ReplaceLoadCancellation(cancellationToken);
         CancellationToken token = linkedCancellation.Token;
-        await DisposeVideoSessionAsync();
-
-        int generation = Interlocked.Increment(ref _videoGeneration);
-        _isLoading = true;
-        _hasFrame = false;
-        await SetStateAsync("Preparing video preview…", isProgressActive: true, isVisible: true);
-
         VideoPlaybackSession? session = null;
         try
         {
+            await DisposeVideoSessionAsync();
+            token.ThrowIfCancellationRequested();
+            int generation = Interlocked.Increment(ref _videoGeneration);
+            _isLoading = true;
+            _hasFrame = false;
+            await SetStateAsync("Preparing video preview…", isProgressActive: true, isVisible: true);
             MediaToolPaths tools = MediaToolLocator.Locate();
             session = await VideoPlaybackSession.CreateAsync(source, tools, knownContentLength, token).ConfigureAwait(false);
-            token.ThrowIfCancellationRequested();
-            if (generation != Volatile.Read(ref _videoGeneration))
+            await _videoLifecycleGate.WaitAsync(token).ConfigureAwait(false);
+            try
             {
-                throw new OperationCanceledException(token);
-            }
+                token.ThrowIfCancellationRequested();
+                if (generation != Volatile.Read(ref _videoGeneration))
+                {
+                    throw new OperationCanceledException(token);
+                }
 
-            if (!App.Services.TryTrackVideoPlaybackSession(session))
+                if (!App.Services.TryTrackVideoPlaybackSession(session))
+                {
+                    throw new InvalidOperationException("Video playback is unavailable while Studio is shutting down.");
+                }
+
+                VideoPlaybackSession playbackSession = session;
+                _videoSession = playbackSession;
+                session = null;
+                _videoPosition = TimeSpan.Zero;
+                _isLoading = false;
+                await ConfigureVideoTransportAsync(playbackSession.Metadata);
+                _ = StartPlaybackAsync(playbackSession, TimeSpan.Zero, generation);
+            }
+            finally
             {
-                throw new InvalidOperationException("Video playback is unavailable while Studio is shutting down.");
+                _videoLifecycleGate.Release();
             }
-
-            _videoSession = session;
-            session = null;
-            _videoPosition = TimeSpan.Zero;
-            _isLoading = false;
-            await ConfigureVideoTransportAsync(_videoSession.Metadata);
-            _ = StartPlaybackAsync(_videoSession, TimeSpan.Zero, generation);
         }
         catch (OperationCanceledException)
         {
@@ -152,6 +157,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
         }
         catch (Exception exception)
         {
+            token.ThrowIfCancellationRequested();
             _isLoading = false;
             _hasFrame = false;
             await SetStateAsync(
@@ -166,12 +172,8 @@ public sealed partial class Direct3DPreviewControl : UserControl
                 await session.DisposeAsync();
             }
 
-            if (ReferenceEquals(
-                Interlocked.CompareExchange(ref _loadCancellation, null, linkedCancellation),
-                linkedCancellation))
-            {
-                linkedCancellation.Dispose();
-            }
+            Interlocked.CompareExchange(ref _loadCancellation, null, linkedCancellation);
+            linkedCancellation.Dispose();
         }
     }
 
@@ -232,6 +234,9 @@ public sealed partial class Direct3DPreviewControl : UserControl
     {
         CancelPendingLoad();
         UnsubscribeFromXamlRoot();
+        // Capture this attachment before yielding. A later Loaded event may
+        // already have installed a new renderer when cleanup resumes.
+        PreviewRendererSession? renderer = Interlocked.Exchange(ref _renderer, null);
         try
         {
             await DisposeVideoSessionAsync();
@@ -241,7 +246,6 @@ public sealed partial class Direct3DPreviewControl : UserControl
             Debug.WriteLine($"Video playback shutdown failed: {exception}");
         }
 
-        PreviewRendererSession? renderer = Interlocked.Exchange(ref _renderer, null);
         if (renderer is null)
         {
             return;
@@ -356,9 +360,18 @@ public sealed partial class Direct3DPreviewControl : UserControl
 
         if (_isVideoPlaying)
         {
-            CancelPlayback();
-            await session.StopAsync();
-            await UpdatePlaybackStateAsync(isPlaying: false);
+            try
+            {
+                CancelPlayback();
+                await session.StopAsync();
+                if (ReferenceEquals(session, Volatile.Read(ref _videoSession)))
+                    await UpdatePlaybackStateAsync(isPlaying: false);
+            }
+            catch (Exception exception)
+            {
+                if (ReferenceEquals(session, Volatile.Read(ref _videoSession)))
+                    await SetStateAsync($"Video preview could not pause. {exception.Message}", false, true);
+            }
             return;
         }
 
@@ -395,8 +408,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
 
         CancellationTokenSource replacement = new();
         CancellationTokenSource? previous = Interlocked.Exchange(ref _seekDebounceCancellation, replacement);
-        previous?.Cancel();
-        previous?.Dispose();
+        CancelSafely(previous);
 
         try
         {
@@ -435,12 +447,8 @@ public sealed partial class Direct3DPreviewControl : UserControl
         }
         finally
         {
-            if (ReferenceEquals(
-                Interlocked.CompareExchange(ref _seekDebounceCancellation, null, replacement),
-                replacement))
-            {
-                replacement.Dispose();
-            }
+            Interlocked.CompareExchange(ref _seekDebounceCancellation, null, replacement);
+            replacement.Dispose();
         }
     }
 
@@ -457,13 +465,12 @@ public sealed partial class Direct3DPreviewControl : UserControl
 
         CancellationTokenSource replacement = new();
         CancellationTokenSource? previous = Interlocked.Exchange(ref _playbackCancellation, replacement);
-        previous?.Cancel();
-        previous?.Dispose();
+        CancelSafely(previous);
         _resumePlaybackAfterSeek = false;
-        await UpdatePlaybackStateAsync(isPlaying: true);
 
         try
         {
+            await UpdatePlaybackStateAsync(isPlaying: true);
             await session.DecodeAsync(
                 startPosition,
                 frame => SubmitVideoFrame(session, generation, frame),
@@ -498,9 +505,9 @@ public sealed partial class Direct3DPreviewControl : UserControl
                 Interlocked.CompareExchange(ref _playbackCancellation, null, replacement),
                 replacement))
             {
-                replacement.Dispose();
                 await UpdatePlaybackStateAsync(isPlaying: false);
             }
+            replacement.Dispose();
         }
     }
 
@@ -518,32 +525,47 @@ public sealed partial class Direct3DPreviewControl : UserControl
 
         PreviewRendererSession? renderer = Volatile.Read(ref _renderer);
         TimeSpan timestamp = frame.Timestamp;
-        if (renderer is null || !renderer.TrySubmitFrame(frame))
+        if (renderer is null)
+        {
+            frame.Dispose();
+            return;
+        }
+        if (!renderer.TrySubmitFrame(frame))
         {
             return;
         }
 
         _hasFrame = true;
         _videoPosition = timestamp;
-        _ = UpdateVideoFrameStateAsync(timestamp, session.Metadata.Duration);
+        _ = UpdateVideoFrameStateAsync(session, generation, timestamp);
     }
 
     private Task ConfigureVideoTransportAsync(VideoMetadata metadata)
         => RunOnDispatcherAsync(() =>
         {
             VideoTransport.Visibility = Visibility.Visible;
-            PositionSlider.Minimum = 0;
-            PositionSlider.Maximum = Math.Max(metadata.Duration.TotalSeconds, 0.001);
-            PositionSlider.Value = 0;
+            _isUpdatingPosition = true;
+            try
+            {
+                PositionSlider.Minimum = 0;
+                PositionSlider.Maximum = Math.Max(metadata.Duration.TotalSeconds, 0.001);
+                PositionSlider.Value = 0;
+            }
+            finally
+            {
+                _isUpdatingPosition = false;
+            }
             PositionText.Text = $"{FormatTime(TimeSpan.Zero)} / {FormatTime(metadata.Duration)}";
             SetPlaybackButtonState(isPlaying: false);
         });
 
-    private Task UpdateVideoFrameStateAsync(TimeSpan position, TimeSpan duration)
+    private Task UpdateVideoFrameStateAsync(VideoPlaybackSession session, int generation, TimeSpan position)
         => RunOnDispatcherAsync(() =>
         {
+            if (!ReferenceEquals(session, Volatile.Read(ref _videoSession))
+                || generation != Volatile.Read(ref _videoGeneration)) return;
             SetState(string.Empty, isProgressActive: false, isVisible: false);
-            UpdatePosition(position, duration);
+            UpdatePosition(position, session.Metadata.Duration);
         });
 
     private Task UpdatePositionAsync(TimeSpan position, TimeSpan duration)
@@ -583,15 +605,20 @@ public sealed partial class Direct3DPreviewControl : UserControl
     private void CancelPlayback()
     {
         CancellationTokenSource? cancellation = Interlocked.Exchange(ref _playbackCancellation, null);
-        cancellation?.Cancel();
-        cancellation?.Dispose();
+        CancelSafely(cancellation);
         Volatile.Read(ref _videoSession)?.Cancel();
         _isVideoPlaying = false;
     }
 
     private void BeginVideoCleanup()
     {
-        _videoCleanupTask = DisposeVideoSessionAsync();
+        _videoCleanupTask = ObserveVideoCleanupAsync();
+    }
+
+    private async Task ObserveVideoCleanupAsync()
+    {
+        try { await DisposeVideoSessionAsync(); }
+        catch (Exception exception) { Debug.WriteLine($"Video playback shutdown failed: {exception}"); }
     }
 
     private async Task DisposeVideoSessionAsync()
@@ -605,8 +632,7 @@ public sealed partial class Direct3DPreviewControl : UserControl
 
             CancellationTokenSource? seekCancellation =
                 Interlocked.Exchange(ref _seekDebounceCancellation, null);
-            seekCancellation?.Cancel();
-            seekCancellation?.Dispose();
+            CancelSafely(seekCancellation);
 
             VideoPlaybackSession? session = Interlocked.Exchange(ref _videoSession, null);
             if (session is not null)
@@ -668,38 +694,26 @@ public sealed partial class Direct3DPreviewControl : UserControl
     {
         var replacement = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         CancellationTokenSource? previous = Interlocked.Exchange(ref _loadCancellation, replacement);
-        previous?.Cancel();
-        previous?.Dispose();
+        CancelSafely(previous);
         return replacement;
     }
 
     private void CancelPendingLoad()
     {
         CancellationTokenSource? cancellation = Interlocked.Exchange(ref _loadCancellation, null);
-        cancellation?.Cancel();
-        cancellation?.Dispose();
+        CancelSafely(cancellation);
+    }
+
+    private static void CancelSafely(CancellationTokenSource? cancellation)
+    {
+        // Only the operation that created a source disposes it, after its last
+        // continuation. Replacement may race that final continuation.
+        try { cancellation?.Cancel(); }
+        catch (ObjectDisposedException) { }
     }
 
     private Task SetStateAsync(string message, bool isProgressActive, bool isVisible)
-    {
-        if (DispatcherQueue.HasThreadAccess)
-        {
-            SetState(message, isProgressActive, isVisible);
-            return Task.CompletedTask;
-        }
-
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!DispatcherQueue.TryEnqueue(() =>
-            {
-                SetState(message, isProgressActive, isVisible);
-                completion.SetResult();
-            }))
-        {
-            completion.SetResult();
-        }
-
-        return completion.Task;
-    }
+        => RunOnDispatcherAsync(() => SetState(message, isProgressActive, isVisible));
 
     private void SetState(string message, bool isProgressActive, bool isVisible)
     {

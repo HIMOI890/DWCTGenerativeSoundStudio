@@ -1776,6 +1776,20 @@ class ModelManager:
             return self._diffusers_snapshot_complete(path)
         if self._snapshot_has_incomplete_markers(path):
             return False
+        if kind == "transformers":
+            try:
+                for filename in entry.get("required_files") or ["config.json", "tokenizer_config.json"]:
+                    if not isinstance(filename, str) or Path(filename).name != filename:
+                        return False
+                    metadata = json.loads((path / filename).read_text(encoding="utf-8"))
+                    if not isinstance(metadata, dict) or not metadata:
+                        return False
+                config = json.loads((path / "config.json").read_text(encoding="utf-8"))
+                if entry.get("family") and config.get("model_type") != entry["family"]:
+                    return False
+                return self._internal_component_has_weights(path, weight_format="safetensors")
+            except (OSError, ValueError, TypeError):
+                return False
         if kind == "motion_adapter":
             try:
                 has_config = _path_exists_safe(path / "config.json") or _path_exists_safe(

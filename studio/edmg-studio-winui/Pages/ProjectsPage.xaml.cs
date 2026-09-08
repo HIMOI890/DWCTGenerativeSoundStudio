@@ -9,7 +9,7 @@ namespace EdmgStudio.WinUI.Pages;
 
 public sealed partial class ProjectsPage : Page, IStudioRefreshable
 {
-    private bool _refreshing;
+    private readonly LatestRequestGate _refreshRequests = new();
     private bool _creating;
     private CancellationTokenSource? _healthCancellation;
 
@@ -19,6 +19,7 @@ public sealed partial class ProjectsPage : Page, IStudioRefreshable
         Loaded += async (_, _) => await RefreshAsync();
         Unloaded += (_, _) =>
         {
+            _refreshRequests.Cancel();
             _healthCancellation?.Cancel();
             _healthCancellation?.Dispose();
             _healthCancellation = null;
@@ -29,12 +30,7 @@ public sealed partial class ProjectsPage : Page, IStudioRefreshable
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
-        if (_refreshing)
-        {
-            return;
-        }
-
-        _refreshing = true;
+        using var request = _refreshRequests.Begin(cancellationToken);
         ProjectProgress.IsActive = true;
         ProjectEmptyState.Visibility = Visibility.Collapsed;
         ProjectCountText.Text = "Loading…";
@@ -49,7 +45,8 @@ public sealed partial class ProjectsPage : Page, IStudioRefreshable
                 return;
             }
 
-            var response = await App.Services.ApiClient.GetProjectsAsync(cancellationToken);
+            var response = await App.Services.ApiClient.GetProjectsAsync(request.Token);
+            if (!request.IsCurrent) return;
             Projects.Clear();
             foreach (var project in response.Projects.OrderByDescending(ProjectSortKey))
             {
@@ -62,8 +59,12 @@ public sealed partial class ProjectsPage : Page, IStudioRefreshable
                 ShowEmpty("No projects yet", "Create your first Studio session above.");
             }
         }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+        {
+        }
         catch (Exception exception)
         {
+            if (!request.IsCurrent) return;
             Projects.Clear();
             ProjectCountText.Text = "Load failed";
             ShowError("Projects could not be loaded", UserMessage(exception));
@@ -71,8 +72,7 @@ public sealed partial class ProjectsPage : Page, IStudioRefreshable
         }
         finally
         {
-            ProjectProgress.IsActive = false;
-            _refreshing = false;
+            if (request.IsCurrent) ProjectProgress.IsActive = false;
         }
     }
 
@@ -140,6 +140,7 @@ public sealed partial class ProjectsPage : Page, IStudioRefreshable
         {
             ProjectHealthResponse response =
                 await App.Services.ApiClient.GetProjectHealthAsync(project.Id, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             ProjectHealthDto health = response.Health;
             int missingAssets = health.AssetIndex.MissingCount;
             int issueCount = health.Issues.Count;

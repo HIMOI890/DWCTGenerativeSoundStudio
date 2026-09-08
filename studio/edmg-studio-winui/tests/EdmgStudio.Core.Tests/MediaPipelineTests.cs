@@ -309,6 +309,114 @@ public sealed class MediaPipelineTests
         Assert.IsFalse(File.Exists(temporaryPath));
     }
 
+    [TestMethod]
+    public async Task ConcurrentPlaybackReplacementNeverOrphansADecoder()
+    {
+        using var temporaryDirectory = new TemporaryDirectory();
+        var decoder = new ControlledVideoDecoder();
+        await using var source = new MemoryStream([1, 2, 3]);
+        await using var session = await VideoPlaybackSession.CreateAsync(source, decoder, temporaryDirectory.Path);
+        Task first = session.DecodeAsync(TimeSpan.Zero, static frame => frame.Dispose());
+        await decoder.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Task second = session.DecodeAsync(TimeSpan.FromSeconds(1), static frame => frame.Dispose());
+        await decoder.Stopping.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Task third = session.DecodeAsync(TimeSpan.FromSeconds(2), static frame => frame.Dispose());
+        decoder.AllowStop.TrySetResult();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => first.WaitAsync(TimeSpan.FromSeconds(2)));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => second.WaitAsync(TimeSpan.FromSeconds(2)));
+        await session.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => third.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.AreEqual(1, decoder.MaximumActive);
+        Assert.AreEqual(0, decoder.Active);
+    }
+
+    [TestMethod]
+    public async Task ConcurrentDisposalWaitsForFailedDecoderAndDeletesSpool()
+    {
+        using var temporaryDirectory = new TemporaryDirectory();
+        var decoder = new ControlledVideoDecoder(failOnStop: true);
+        await using var source = new MemoryStream([1, 2, 3]);
+        var session = await VideoPlaybackSession.CreateAsync(source, decoder, temporaryDirectory.Path);
+        Task playback = session.DecodeAsync(TimeSpan.Zero, static frame => frame.Dispose());
+        await decoder.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Task firstDisposal = session.DisposeAsync().AsTask();
+        await decoder.Stopping.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Task secondDisposal = session.DisposeAsync().AsTask();
+        Assert.IsFalse(secondDisposal.IsCompleted);
+        decoder.AllowStop.TrySetResult();
+        await Task.WhenAll(firstDisposal, secondDisposal).WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => playback);
+        Assert.IsFalse(File.Exists(session.TemporaryPath));
+        await session.StopAsync();
+        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(
+            () => session.DecodeAsync(TimeSpan.Zero, static frame => frame.Dispose()));
+    }
+
+    [TestMethod]
+    public async Task MaximumConfiguredSpoolBudgetDoesNotOverflowReadSize()
+    {
+        using var temporaryDirectory = new TemporaryDirectory();
+        using var spoolLimit = new EnvironmentVariableScope("EDMG_STUDIO_VIDEO_SPOOL_MAX_BYTES", long.MaxValue.ToString());
+        await using var source = new MemoryStream([1, 2, 3]);
+        await using var session = await VideoPlaybackSession.CreateAsync(source, new FakeVideoDecoder(), temporaryDirectory.Path);
+        Assert.AreEqual(3L, new FileInfo(session.TemporaryPath).Length);
+    }
+
+    [TestMethod]
+    public async Task DisposalWhileReplacementWaitsDoesNotStartAnotherDecoder()
+    {
+        using var temporaryDirectory = new TemporaryDirectory();
+        var decoder = new ControlledVideoDecoder();
+        await using var source = new MemoryStream([1, 2, 3]);
+        var session = await VideoPlaybackSession.CreateAsync(source, decoder, temporaryDirectory.Path);
+        Task first = session.DecodeAsync(TimeSpan.Zero, static frame => frame.Dispose());
+        await decoder.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Task replacement = session.DecodeAsync(TimeSpan.FromSeconds(1), static frame => frame.Dispose());
+        await decoder.Stopping.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Task disposal = session.DisposeAsync().AsTask();
+        decoder.AllowStop.TrySetResult();
+        await disposal.WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => first);
+        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(() => replacement);
+        Assert.AreEqual(0, decoder.Active);
+        Assert.IsFalse(File.Exists(session.TemporaryPath));
+    }
+
+    private sealed class ControlledVideoDecoder(bool failOnStop = false) : IVideoDecoder
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Stopping { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource AllowStop { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Active;
+        public int MaximumActive;
+
+        public Task<VideoMetadata> ProbeAsync(string sourcePath, CancellationToken cancellationToken = default)
+            => Task.FromResult(new VideoMetadata(2, 2, TimeSpan.FromSeconds(3), 30, 0));
+
+        public async Task DecodeAsync(string sourcePath, VideoMetadata metadata, TimeSpan startPosition,
+            Action<OwnedCpuFrame> submitFrame, bool paceFrames, int? maximumFrames, CancellationToken cancellationToken)
+        {
+            int active = Interlocked.Increment(ref Active);
+            MaximumActive = Math.Max(MaximumActive, active);
+            Started.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                Stopping.TrySetResult();
+                await AllowStop.Task;
+                if (failOnStop) throw new InvalidDataException("Decoder failed during shutdown.");
+                throw;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref Active);
+            }
+        }
+    }
+
     private static string CreateFile(string directory, string fileName)
     {
         string path = System.IO.Path.Combine(directory, fileName);

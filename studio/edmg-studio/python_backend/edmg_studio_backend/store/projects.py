@@ -19,7 +19,7 @@ from copy import deepcopy
 
 logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 _CORRUPTED_QUARANTINE_SUFFIX = ".__corrupted_quarantine"
 _PROJECT_LOCK_FILENAME = ".project.lock"
 _PROJECT_LOCK_POLL_S = 0.01
@@ -69,10 +69,22 @@ def _migrate_v1_to_v2(data: dict[str, Any]) -> dict[str, Any]:
     return next_data
 
 
+def _migrate_v2_to_v3(data: dict[str, Any]) -> dict[str, Any]:
+    """Enable durable editor contracts without rewriting legacy render timelines.
+
+    Exact timeline adaptation happens at the editor boundary, preserving all
+    legacy fields and settings. The loader backs up the original document first.
+    """
+    result = deepcopy(data)
+    result["schema_version"] = 3
+    return result
+
+
 # Target version -> migration from previous version.
 PROJECT_MIGRATIONS: dict[int, MigrationFn] = {
     1: _migrate_v0_to_v1,
     2: _migrate_v1_to_v2,
+    3: _migrate_v2_to_v3,
 }
 
 

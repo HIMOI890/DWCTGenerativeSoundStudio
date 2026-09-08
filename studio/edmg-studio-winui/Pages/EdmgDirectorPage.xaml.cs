@@ -1,4 +1,6 @@
 using EdmgStudio.Core.Models;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -9,6 +11,11 @@ public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
     private CancellationTokenSource? _loadCancellation;
     private bool _isSynchronizingSelection;
     private string _nextDestination = "projects";
+    private JsonObject? _directorDocument;
+    private long _directorRevision;
+    private string? _directorProjectId;
+    private string? _reviewedDirectorJobId;
+    private DirectorGenerationRequest? _pendingDirectorRequest;
 
     public EdmgDirectorPage()
     {
@@ -85,6 +92,14 @@ public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
     {
         ProjectResponse response = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
         ProjectDto project = response.Project;
+
+        JsonElement director = await App.Services.ApiClient.GetDirectorDocumentAsync(projectId, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        _directorProjectId = projectId;
+        _reviewedDirectorJobId = null;
+        _pendingDirectorRequest = null;
+        DirectorDraftBox.Text = "";
+        ApplyDirectorDocument(director);
 
         ProjectIdText.Text = project.Id;
         AnalysisText.Text = project.HasAnalysis
@@ -213,6 +228,12 @@ public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
 
     private void ClearProjectSummary()
     {
+        _directorDocument = null;
+        _directorProjectId = null;
+        StoryThemeBox.Text = "";
+        StoryStyleBox.Text = "";
+        SceneSpecsBox.Text = "[]";
+        PromptPreviewBox.Text = "";
         _isSynchronizingSelection = true;
         VariantComboBox.ItemsSource = null;
         VariantComboBox.SelectedIndex = -1;
@@ -251,8 +272,140 @@ public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
     {
         bool hasProject = !string.IsNullOrWhiteSpace(App.Services.Session.ActiveProjectId);
         ProductionActions.IsEnabled = hasProject;
+        ApplyDirectorDraftButton.IsEnabled = hasProject && _reviewedDirectorJobId is not null;
         VariantComboBox.IsEnabled = hasProject && VariantComboBox.Items.Count > 0;
         NextStepButton.IsEnabled = true;
+    }
+
+    private void ApplyDirectorDocument(JsonElement response)
+    {
+        _directorRevision = response.GetProperty("revision").GetInt64();
+        _directorDocument = JsonNode.Parse(response.GetProperty("document").GetRawText())!.AsObject();
+        StoryThemeBox.Text = _directorDocument["story_bible"]?["project_theme"]?.GetValue<string>() ?? "";
+        StoryStyleBox.Text = _directorDocument["story_bible"]?["visual_style"]?.GetValue<string>() ?? "";
+        SceneSpecsBox.Text = _directorDocument["scenes"]?.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) ?? "[]";
+        PromptPreviewBox.Text = "";
+        _reviewedDirectorJobId = null;
+        ApplyDirectorDraftButton.IsEnabled = false;
+    }
+
+    private async Task RunDirectorActionAsync(Func<string, CancellationToken, Task> action)
+    {
+        if (_directorProjectId is not string projectId) return;
+        CancellationToken token = _loadCancellation?.Token ?? CancellationToken.None;
+        SetBusy(true);
+        try
+        {
+            if (_directorDocument is null ||
+                StoryThemeBox.Text != (_directorDocument["story_bible"]?["project_theme"]?.GetValue<string>() ?? "") ||
+                StoryStyleBox.Text != (_directorDocument["story_bible"]?["visual_style"]?.GetValue<string>() ?? "") ||
+                !JsonNode.DeepEquals(JsonNode.Parse(SceneSpecsBox.Text), _directorDocument["scenes"]))
+                throw new InvalidOperationException("Save your direction changes before generating, reviewing or applying a draft.");
+            await action(projectId, token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            if (!token.IsCancellationRequested)
+                ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error);
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                SetBusy(false);
+                UpdateProjectActionAvailability();
+                ApplyDirectorDraftButton.IsEnabled = _reviewedDirectorJobId is not null;
+            }
+        }
+    }
+
+    private async void GenerateDirector_Click(object sender, RoutedEventArgs e) =>
+        await RunDirectorActionAsync(async (projectId, token) =>
+        {
+            string instruction = DirectorInstructionBox.Text.Trim();
+            if (instruction.Length == 0) throw new InvalidOperationException("Enter direction for Qwen3-VL first.");
+            if (_pendingDirectorRequest is null || _pendingDirectorRequest.Instruction != instruction || _pendingDirectorRequest.ExpectedRevision != _directorRevision)
+                _pendingDirectorRequest = new(_directorRevision, Guid.NewGuid().ToString(), instruction);
+            JsonElement response = await App.Services.ApiClient.GenerateDirectorAsync(projectId, _pendingDirectorRequest, token);
+            token.ThrowIfCancellationRequested();
+            App.Services.Session.SetSelectedJob(projectId, response.GetProperty("job_id").GetString());
+            _pendingDirectorRequest = null;
+            _reviewedDirectorJobId = null;
+            DirectorDraftBox.Text = "Draft queued. Review the selected job when generation finishes.";
+            UpdateSessionContext();
+            ShowStatus("Director draft queued. Track progress or cancel in Queue.", InfoBarSeverity.Success);
+        });
+
+    private async void ReviewDirector_Click(object sender, RoutedEventArgs e) =>
+        await RunDirectorActionAsync(async (projectId, token) =>
+        {
+            _reviewedDirectorJobId = null;
+            string jobId = App.Services.Session.SelectedJobId ?? throw new InvalidOperationException("Select a Director job in Queue first.");
+            JsonElement draft = await App.Services.ApiClient.GetDirectorDraftAsync(projectId, jobId, token);
+            token.ThrowIfCancellationRequested();
+            string? status = draft.GetProperty("status").GetString();
+            if (status != "succeeded")
+            {
+                DirectorDraftBox.Text = $"Job {status}: {draft.GetProperty("error")}";
+                return;
+            }
+            DirectorDraftBox.Text = JsonNode.Parse(draft.GetProperty("result").GetProperty("document").GetRawText())!.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            _reviewedDirectorJobId = jobId;
+            ShowStatus("Review the draft before applying it to saved direction.", InfoBarSeverity.Informational);
+        });
+
+    private async void ApplyDirectorDraft_Click(object sender, RoutedEventArgs e) =>
+        await RunDirectorActionAsync(async (projectId, token) =>
+        {
+            if (_reviewedDirectorJobId is not string jobId) return;
+            JsonElement response = await App.Services.ApiClient.ApplyDirectorDraftAsync(projectId, jobId, new(_directorRevision), token);
+            token.ThrowIfCancellationRequested();
+            ApplyDirectorDocument(response);
+            DirectorDraftBox.Text = "Reviewed draft applied.";
+            ShowStatus("Reviewed direction applied to the project.", InfoBarSeverity.Success);
+        });
+
+    private async void SaveDirector_Click(object sender, RoutedEventArgs e)
+    {
+        if (_directorDocument is null || _directorProjectId is not string projectId) return;
+        CancellationToken token = _loadCancellation?.Token ?? CancellationToken.None;
+        SetBusy(true);
+        try
+        {
+            JsonObject document = _directorDocument.DeepClone().AsObject();
+            document["story_bible"]!["project_theme"] = StoryThemeBox.Text;
+            document["story_bible"]!["visual_style"] = StoryStyleBox.Text;
+            document["scenes"] = JsonNode.Parse(SceneSpecsBox.Text)?.AsArray() ?? throw new JsonException("Scenes must be a JSON array.");
+            using JsonDocument payload = JsonDocument.Parse(document.ToJsonString());
+            JsonElement saved = await App.Services.ApiClient.SaveDirectorDocumentAsync(projectId, new(_directorRevision, payload.RootElement.Clone()), token);
+            token.ThrowIfCancellationRequested();
+            if (_directorProjectId != projectId) return;
+            ApplyDirectorDocument(saved);
+            ShowStatus("Story Bible and scenes saved.", InfoBarSeverity.Success);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception exception) { ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error); }
+        finally { if (!token.IsCancellationRequested) { SetBusy(false); UpdateProjectActionAvailability(); } }
+    }
+
+    private async void CompileDirector_Click(object sender, RoutedEventArgs e)
+    {
+        if (_directorProjectId is not string projectId) return;
+        CancellationToken token = _loadCancellation?.Token ?? CancellationToken.None;
+        SetBusy(true);
+        try
+        {
+            string engine = (PromptEngineBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "hunyuan_video15";
+            JsonElement response = await App.Services.ApiClient.GetDirectorPromptsAsync(projectId, engine, token);
+            token.ThrowIfCancellationRequested();
+            if (_directorProjectId != projectId) return;
+            PromptPreviewBox.Text = string.Join("\n\n", response.GetProperty("packages").EnumerateArray().Select(item => item.GetProperty("prompt").GetString()));
+            ShowStatus("Saved scenes compiled. No generation job submitted.", InfoBarSeverity.Success);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception exception) { ShowStatus(StudioPageHelpers.GetErrorMessage(exception), InfoBarSeverity.Error); }
+        finally { if (!token.IsCancellationRequested) { SetBusy(false); UpdateProjectActionAvailability(); } }
     }
 
     private void ShowStatus(string message, InfoBarSeverity severity)

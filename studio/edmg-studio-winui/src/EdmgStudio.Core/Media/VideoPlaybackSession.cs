@@ -6,6 +6,8 @@ public sealed class VideoPlaybackSession : IAsyncDisposable
     private const long DefaultMaximumSpoolBytes = 512L * 1024 * 1024;
     private readonly IVideoDecoder _decoder;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
+    private readonly object _disposeSync = new();
+    private Task? _disposeTask;
     private CancellationTokenSource? _decodeCancellation;
     private Task? _decodeTask;
     private int _disposed;
@@ -103,7 +105,6 @@ public sealed class VideoPlaybackSession : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        await StopAsync().ConfigureAwait(false);
 
         CancellationTokenSource decodeCancellation;
         Task decodeTask;
@@ -111,15 +112,28 @@ public sealed class VideoPlaybackSession : IAsyncDisposable
         try
         {
             ThrowIfDisposed();
+            // Stop and replacement must be one transition: simultaneous seeks must
+            // never overwrite the only handle to a still-running decoder.
+            await StopCoreAsync().ConfigureAwait(false);
+            ThrowIfDisposed();
+            cancellationToken.ThrowIfCancellationRequested();
             decodeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            decodeTask = _decoder.DecodeAsync(
-                TemporaryPath,
-                Metadata,
-                startPosition,
-                submitFrame,
-                paceFrames,
-                maximumFrames,
-                decodeCancellation.Token);
+            try
+            {
+                decodeTask = _decoder.DecodeAsync(
+                    TemporaryPath,
+                    Metadata,
+                    startPosition,
+                    submitFrame,
+                    paceFrames,
+                    maximumFrames,
+                    decodeCancellation.Token);
+            }
+            catch
+            {
+                decodeCancellation.Dispose();
+                throw;
+            }
             _decodeCancellation = decodeCancellation;
             _decodeTask = decodeTask;
         }
@@ -165,55 +179,63 @@ public sealed class VideoPlaybackSession : IAsyncDisposable
 
     public async Task StopAsync()
     {
-        Task? decodeTask;
         await _operationGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            _decodeCancellation?.Cancel();
-            decodeTask = _decodeTask;
+            await StopCoreAsync().ConfigureAwait(false);
         }
         finally
         {
             _operationGate.Release();
         }
 
-        if (decodeTask is not null)
+    }
+
+    // Caller owns _operationGate. Decode errors belong to the playback caller;
+    // teardown must still clear state and remove temporary media after failure.
+    private async Task StopCoreAsync()
+    {
+        Task? decodeTask = _decodeTask;
+        _decodeCancellation?.Cancel();
+        try
         {
-            try
+            if (decodeTask is not null)
             {
                 await decodeTask.ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
-            {
-            }
-
-            await _operationGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-            try
-            {
-                if (ReferenceEquals(_decodeTask, decodeTask))
-                {
-                    _decodeCancellation?.Dispose();
-                    _decodeCancellation = null;
-                    _decodeTask = null;
-                }
-            }
-            finally
-            {
-                _operationGate.Release();
-            }
+        }
+        catch (Exception) when (decodeTask?.IsCompleted == true)
+        {
+            // DecodeAsync still observes and reports the original failure.
+        }
+        finally
+        {
+            _decodeCancellation = null;
+            _decodeTask = null;
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        lock (_disposeSync)
         {
-            return;
+            Interlocked.Exchange(ref _disposed, 1);
+            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
         }
+    }
 
-        await StopAsync().ConfigureAwait(false);
-        _operationGate.Dispose();
-        TryDelete(TemporaryPath);
+    private async Task DisposeCoreAsync()
+    {
+        try
+        {
+            await StopAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            // A DecodeAsync continuation or a queued StopAsync may still need
+            // the managed semaphore. It has no native wait handle to release.
+            TryDelete(TemporaryPath);
+        }
     }
 
     private void ThrowIfDisposed()
@@ -237,7 +259,9 @@ public sealed class VideoPlaybackSession : IAsyncDisposable
                 throw new InvalidDataException($"Video previews cannot exceed {FormatByteLimit(maximumSpoolBytes)} of temporary playback data.");
             }
 
-            int requestLength = checked((int)Math.Min(buffer.Length, remainingBudget + 1));
+            int requestLength = remainingBudget >= buffer.Length
+                ? buffer.Length
+                : checked((int)remainingBudget + 1);
             int read = await source.ReadAsync(buffer.AsMemory(0, requestLength), cancellationToken).ConfigureAwait(false);
             if (read == 0)
             {

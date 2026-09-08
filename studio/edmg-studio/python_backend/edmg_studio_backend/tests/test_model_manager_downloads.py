@@ -55,6 +55,30 @@ def _diffusers_entry(model_id: str = "test_diffusers") -> dict:
     }
 
 
+def test_director_catalog_is_pinned_and_requires_complete_snapshot(tmp_path, monkeypatch):
+    from edmg_studio_backend.services.model_catalog import built_in_catalog
+
+    entry = next(item for item in built_in_catalog() if item["id"] == "hf_qwen3_vl_8b_director")
+    assert entry["hf_revision"] == "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
+    manager = _manager(tmp_path, monkeypatch)
+    mode, destination = manager._models_dest(entry)
+    assert mode == "snapshot"
+    destination.mkdir(parents=True, exist_ok=True)
+    for filename in entry["required_files"]:
+        (destination / filename).write_text(json.dumps({"fixture": True}), encoding="utf-8")
+    (destination / "config.json").write_text(json.dumps({"model_type": "qwen3_vl"}), encoding="utf-8")
+    (destination / "model.safetensors.index.json").write_text(json.dumps({
+        "weight_map": {"weight": "model-00001-of-00001.safetensors"}
+    }), encoding="utf-8")
+    assert not manager._internal_asset_installed(entry, destination)
+    write_minimal_safetensors(destination / "model-00001-of-00001.safetensors")
+    assert manager._internal_asset_installed(entry, destination)
+    (destination / "chat_template.json").write_text("{}", encoding="utf-8")
+    assert not manager._internal_asset_installed(entry, destination)
+    profile = _hf_snapshot_download_profile(entry, weight_format="safetensors")
+    assert _hf_profile_matches_path("model-00001-of-00004.safetensors", profile)
+
+
 def _write_valid_unet_snapshot(path: Path, *, extension: str = "safetensors") -> None:
     path.mkdir(parents=True, exist_ok=True)
     (path / "model_index.json").write_text(

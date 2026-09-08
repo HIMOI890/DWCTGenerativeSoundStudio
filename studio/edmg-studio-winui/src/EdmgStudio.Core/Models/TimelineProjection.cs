@@ -430,7 +430,7 @@ public static class TimelineProjection
         var start = Math.Clamp(startSeconds, 0, Math.Max(0, timelineDurationSeconds - MinimumDurationSeconds));
         var end = Math.Clamp(endSeconds, start + MinimumDurationSeconds, timelineDurationSeconds);
         var result = CloneLane(lane);
-        if (IsVideo(lane))
+        if (IsTimedMedia(lane))
         {
             var speed = Math.Clamp(lane.Speed, 0.25, 4);
             var sourceIn = Math.Max(0, lane.SourceInSeconds + ((start - lane.StartSeconds) * speed));
@@ -470,7 +470,7 @@ public static class TimelineProjection
         var right = CloneLane(lane, createNewIdentity: true);
         left.EndSeconds = splitSeconds;
         right.StartSeconds = splitSeconds;
-        if (IsVideo(lane))
+        if (IsTimedMedia(lane))
         {
             var speed = Math.Clamp(lane.Speed, 0.25, 4);
             var sourceSplit = Math.Max(0, lane.SourceInSeconds + ((splitSeconds - lane.StartSeconds) * speed));
@@ -942,8 +942,9 @@ public static class TimelineProjection
         return tracks.Count - 1;
     }
 
-    private static bool IsVideo(TimelineLaneDocument lane) =>
-        string.Equals(lane.Type, "video", StringComparison.OrdinalIgnoreCase);
+    private static bool IsTimedMedia(TimelineLaneDocument lane) =>
+        string.Equals(lane.Type, "video", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(lane.Type, "audio", StringComparison.OrdinalIgnoreCase);
 
     private static HashSet<string> GetPresentMediaProperties(JsonObject source)
     {
