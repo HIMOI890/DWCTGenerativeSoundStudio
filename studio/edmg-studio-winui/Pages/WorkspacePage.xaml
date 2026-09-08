@@ -82,6 +82,21 @@
                 AutomationProperties.AutomationId="Workspace.Mode.Storyboard"
                 Icon="Video"
                 Text="Storyboard" />
+            <SelectorBarItem
+                x:Name="DirectorSelectorItem"
+                AutomationProperties.AutomationId="Workspace.Mode.Director"
+                Icon="Edit"
+                Text="Director" />
+            <SelectorBarItem
+                x:Name="PlannerSelectorItem"
+                AutomationProperties.AutomationId="Workspace.Mode.Planner"
+                Icon="Bullets"
+                Text="AI Planner" />
+            <SelectorBarItem
+                x:Name="ReactiveSelectorItem"
+                AutomationProperties.AutomationId="Workspace.Mode.Reactive"
+                Icon="Refresh"
+                Text="Reactive Lab" />
         </SelectorBar>
 
         <ScrollViewer
@@ -659,6 +674,186 @@
                             </ListView>
                         </StackPanel>
                     </Border>
+                </StackPanel>
+
+                <StackPanel x:Name="DirectorPanel" Visibility="Collapsed" Spacing="16">
+                    <Border Style="{StaticResource WorkspaceCardStyle}">
+                        <StackPanel Spacing="12">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="EDMG Director" />
+                                    <TextBlock
+                                        x:Name="DirectorSessionText"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="Director uses the active Workspace project, analysis, and selected storyboard."
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button
+                                    x:Name="OpenFullDirectorButton"
+                                    Grid.Column="1"
+                                    AutomationProperties.AutomationId="Workspace.Director.OpenFull"
+                                    Click="OpenFullDirectorButton_Click"
+                                    Content="Open full Director" />
+                            </Grid>
+                            <Grid ColumnSpacing="12" RowSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox
+                                    x:Name="WorkspaceDirectorThemeTextBox"
+                                    AutomationProperties.AutomationId="Workspace.Director.Theme"
+                                    Header="Project theme"
+                                    PlaceholderText="Theme, subject, or world" />
+                                <TextBox
+                                    x:Name="WorkspaceDirectorStyleTextBox"
+                                    Grid.Column="1"
+                                    AutomationProperties.AutomationId="Workspace.Director.Style"
+                                    Header="Visual style"
+                                    PlaceholderText="Palette, lens, texture, continuity" />
+                            </Grid>
+                            <TextBox
+                                x:Name="WorkspaceDirectorInstructionTextBox"
+                                AutomationProperties.AutomationId="Workspace.Director.Instruction"
+                                Header="Direction instruction"
+                                AcceptsReturn="True"
+                                MinHeight="88"
+                                PlaceholderText="Describe the next approved direction pass for this session."
+                                TextWrapping="Wrap" />
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock
+                                    x:Name="WorkspaceDirectorRevisionText"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="Revision —" />
+                                <Button
+                                    Grid.Column="1"
+                                    x:Name="UseWorkspaceStoryboardButton"
+                                    AutomationProperties.AutomationId="Workspace.Director.UseStoryboard"
+                                    Click="UseWorkspaceStoryboardButton_Click"
+                                    Content="Use selected storyboard" />
+                                <Button
+                                    Grid.Column="2"
+                                    x:Name="SaveWorkspaceDirectorButton"
+                                    AutomationProperties.AutomationId="Workspace.Director.Save"
+                                    Click="SaveWorkspaceDirectorButton_Click"
+                                    Content="Save direction"
+                                    Style="{StaticResource AccentButtonStyle}" />
+                                <Button
+                                    Grid.Column="3"
+                                    x:Name="PrepareWorkspacePromptsButton"
+                                    AutomationProperties.AutomationId="Workspace.Director.PreparePrompts"
+                                    Click="PrepareWorkspacePromptsButton_Click"
+                                    Content="Prepare prompts" />
+                            </Grid>
+                            <Expander Header="Advanced: SceneSpecs JSON" IsExpanded="False">
+                                <TextBox
+                                    x:Name="WorkspaceDirectorSceneSpecsTextBox"
+                                    AutomationProperties.AutomationId="Workspace.Director.SceneSpecs"
+                                    AcceptsReturn="True"
+                                    FontFamily="Consolas"
+                                    MinHeight="180"
+                                    MaxHeight="420"
+                                    TextWrapping="Wrap" />
+                            </Expander>
+                            <ComboBox
+                                x:Name="WorkspaceDirectorEngineComboBox"
+                                AutomationProperties.AutomationId="Workspace.Director.Engine"
+                                Header="Prompt engine"
+                                SelectedIndex="0">
+                                <ComboBoxItem Content="HunyuanVideo-1.5" Tag="hunyuan_video15" />
+                                <ComboBoxItem Content="LTX-2.5" Tag="ltx_25" />
+                                <ComboBoxItem Content="External provider" Tag="external" />
+                            </ComboBox>
+                            <TextBox
+                                x:Name="WorkspaceDirectorPromptPreviewTextBox"
+                                AutomationProperties.AutomationId="Workspace.Director.PromptPreview"
+                                Header="Prepared prompts"
+                                AcceptsReturn="True"
+                                IsReadOnly="True"
+                                MaxHeight="260"
+                                TextWrapping="Wrap" />
+                            <CommandBar DefaultLabelPosition="Right">
+                                <AppBarButton
+                                    x:Name="GenerateWorkspaceDirectorButton"
+                                    AutomationProperties.AutomationId="Workspace.Director.Generate"
+                                    Click="GenerateWorkspaceDirectorButton_Click"
+                                    Icon="Play"
+                                    Label="Generate draft" />
+                                <AppBarButton
+                                    x:Name="ReviewWorkspaceDirectorButton"
+                                    AutomationProperties.AutomationId="Workspace.Director.Review"
+                                    Click="ReviewWorkspaceDirectorButton_Click"
+                                    Icon="Refresh"
+                                    Label="Review draft" />
+                                <AppBarButton
+                                    x:Name="ApplyWorkspaceDirectorButton"
+                                    AutomationProperties.AutomationId="Workspace.Director.Apply"
+                                    Click="ApplyWorkspaceDirectorButton_Click"
+                                    Icon="Accept"
+                                    IsEnabled="False"
+                                    Label="Apply reviewed draft" />
+                                <AppBarButton
+                                    AutomationProperties.AutomationId="Workspace.Director.Queue"
+                                    Click="NavigateQueueButton_Click"
+                                    Icon="List"
+                                    Label="Open Queue" />
+                            </CommandBar>
+                            <TextBox
+                                x:Name="WorkspaceDirectorDraftTextBox"
+                                AutomationProperties.AutomationId="Workspace.Director.Draft"
+                                Header="Draft review"
+                                AcceptsReturn="True"
+                                IsReadOnly="True"
+                                MaxHeight="300"
+                                TextWrapping="Wrap" />
+                            <TextBlock
+                                x:Name="WorkspaceDirectorStatusText"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="Save direction before preparing prompts or generating a draft."
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel x:Name="PlannerPanel" Visibility="Collapsed" Spacing="16">
+                    <Border Style="{StaticResource WorkspaceCardStyle}">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="AI Planner Lab" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="The full planner runs inside the active Workspace project. Its saved storyboard, scene locks, and planner handoff remain on the same session used by Director, Timeline, and Render."
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                    <Frame
+                        x:Name="WorkspacePlannerFrame"
+                        AutomationProperties.AutomationId="Workspace.Planner.Frame" />
+                </StackPanel>
+
+                <StackPanel x:Name="ReactivePanel" Visibility="Collapsed" Spacing="16">
+                    <Border Style="{StaticResource WorkspaceCardStyle}">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{StaticResource WorkspaceSectionTitleStyle}" Text="Reactive Lab" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="Reactive scheduling runs inside the active Workspace project. Motion curves, cue events, and camera data apply to the same project timeline that Director and Render consume."
+                                TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                    <Frame
+                        x:Name="WorkspaceReactiveFrame"
+                        AutomationProperties.AutomationId="Workspace.Reactive.Frame" />
                 </StackPanel>
 
                 <VisualStateManager.VisualStateGroups>

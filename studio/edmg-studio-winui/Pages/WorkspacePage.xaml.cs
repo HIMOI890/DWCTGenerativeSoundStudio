@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using EdmgStudio.Core.Models;
 using EdmgStudio.Core.Services;
 using EdmgStudio.WinUI.Services;
@@ -31,6 +32,11 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     private string? _pendingReferencePath;
     private int _loadVersion;
     private bool _isSynchronizingSelection;
+    private JsonObject? _directorDocument;
+    private long _directorRevision;
+    private string? _directorProjectId;
+    private string? _directorReviewedJobId;
+    private DirectorGenerationRequest? _directorPendingRequest;
 
     public WorkspacePage()
     {
@@ -47,7 +53,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     {
         base.OnNavigatedTo(e);
         OverviewSelectorItem.IsSelected = true;
-        SetWorkspaceMode(isStoryboard: false);
+        SetWorkspaceMode(isStoryboard: false, isDirector: false, isPlanner: false, isReactive: false);
         await RefreshAsync();
     }
 
@@ -92,10 +98,25 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     private async void WorkspaceMode_SelectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs args)
     {
         bool isStoryboard = sender.SelectedItem == StoryboardSelectorItem;
-        SetWorkspaceMode(isStoryboard);
+        bool isDirector = sender.SelectedItem == DirectorSelectorItem;
+        bool isPlanner = sender.SelectedItem == PlannerSelectorItem;
+        bool isReactive = sender.SelectedItem == ReactiveSelectorItem;
+        SetWorkspaceMode(isStoryboard, isDirector, isPlanner, isReactive);
         if (isStoryboard)
         {
             PopulateStoryboard();
+        }
+        else if (isDirector && TryGetActiveProjectId(out string projectId))
+        {
+            await RunBusyAsync("Loading Director", token => LoadDirectorAsync(projectId, token));
+        }
+        else if (isPlanner)
+        {
+            EnsureSpecialistPage(WorkspacePlannerFrame, typeof(AiPlannerLabPage));
+        }
+        else if (isReactive)
+        {
+            EnsureSpecialistPage(WorkspaceReactiveFrame, typeof(ReactiveLabPage));
         }
 
         await Task.CompletedTask;
@@ -579,6 +600,10 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
         _projectResponse = project;
         PopulateProject();
+        if (WorkspaceModeSelector.SelectedItem == DirectorSelectorItem)
+        {
+            await LoadDirectorAsync(projectId, cancellationToken);
+        }
         await LoadOptionalWorkspaceDataAsync(projectId, cancellationToken, loadVersion);
     }
 
@@ -696,6 +721,332 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         PopulatePlanning();
         PopulateMetadata(project);
     }
+
+    private async Task LoadDirectorAsync(string projectId, CancellationToken cancellationToken)
+    {
+        JsonElement response = await App.Services.ApiClient.GetDirectorDocumentAsync(projectId, cancellationToken);
+        if (_session.ActiveProjectId != projectId)
+        {
+            return;
+        }
+
+        _directorProjectId = projectId;
+        _directorPendingRequest = null;
+        _directorReviewedJobId = null;
+        WorkspaceDirectorDraftTextBox.Text = string.Empty;
+        ApplyDirectorWorkspaceDocument(response);
+        DirectorSessionText.Text =
+            $"{_projectResponse?.Project.Name ?? projectId} · " +
+            $"{CurrentVariants.ElementAtOrDefault(_session.SelectedVariantIndex)?.Scenes.Count ?? 0} selected storyboard scene(s) · " +
+            "analysis and timeline data remain shared with this Workspace session.";
+        WorkspaceDirectorStatusText.Text = "Save direction before preparing prompts or generating a draft.";
+        UpdateDirectorWorkspaceAvailability();
+    }
+
+    private void ApplyDirectorWorkspaceDocument(JsonElement response)
+    {
+        JsonElement document = response.TryGetProperty("document", out JsonElement nested)
+            ? nested
+            : response;
+        _directorRevision = response.TryGetProperty("revision", out JsonElement revision)
+            ? revision.GetInt64()
+            : _projectResponse?.Project.Revision ?? 1;
+        _directorDocument = JsonNode.Parse(document.GetRawText())?.AsObject();
+        if (_directorDocument is null)
+        {
+            _directorDocument = new JsonObject
+            {
+                ["version"] = 1,
+                ["story_bible"] = new JsonObject { ["revision"] = 1 },
+                ["scenes"] = new JsonArray(),
+            };
+        }
+
+        JsonObject bible = _directorDocument["story_bible"]?.AsObject() ?? new JsonObject();
+        WorkspaceDirectorThemeTextBox.Text = bible["project_theme"]?.GetValue<string>() ?? string.Empty;
+        WorkspaceDirectorStyleTextBox.Text = bible["visual_style"]?.GetValue<string>() ?? string.Empty;
+        WorkspaceDirectorSceneSpecsTextBox.Text = _directorDocument["scenes"]?.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) ?? "[]";
+        WorkspaceDirectorPromptPreviewTextBox.Text = string.Empty;
+        _directorReviewedJobId = null;
+        ApplyWorkspaceDirectorButton.IsEnabled = false;
+        WorkspaceDirectorRevisionText.Text = $"Revision {_directorRevision}";
+    }
+
+    private JsonObject BuildWorkspaceDirectorDocument()
+    {
+        if (_directorDocument is null)
+        {
+            throw new InvalidOperationException("Director is still loading for this project.");
+        }
+
+        JsonNode? parsedScenes = JsonNode.Parse(WorkspaceDirectorSceneSpecsTextBox.Text);
+        if (parsedScenes is not JsonArray scenes)
+        {
+            throw new JsonException("SceneSpecs must be a JSON array.");
+        }
+
+        JsonObject document = _directorDocument.DeepClone().AsObject();
+        JsonObject bible = document["story_bible"]?.AsObject() ?? new JsonObject { ["revision"] = 1 };
+        bible["project_theme"] = WorkspaceDirectorThemeTextBox.Text.Trim();
+        bible["visual_style"] = WorkspaceDirectorStyleTextBox.Text.Trim();
+        document["story_bible"] = bible;
+        document["scenes"] = scenes;
+        return document;
+    }
+
+    private bool WorkspaceDirectorInputsMatchDocument()
+    {
+        try
+        {
+            if (_directorDocument is null)
+            {
+                return false;
+            }
+
+            JsonObject document = BuildWorkspaceDirectorDocument();
+            return string.Equals(
+                       document["story_bible"]?["project_theme"]?.GetValue<string>(),
+                       _directorDocument["story_bible"]?["project_theme"]?.GetValue<string>(),
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       document["story_bible"]?["visual_style"]?.GetValue<string>(),
+                       _directorDocument["story_bible"]?["visual_style"]?.GetValue<string>(),
+                       StringComparison.Ordinal) &&
+                   JsonNode.DeepEquals(document["scenes"], _directorDocument["scenes"]);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private void UpdateDirectorWorkspaceAvailability()
+    {
+        bool hasProject = !string.IsNullOrWhiteSpace(_directorProjectId);
+        bool saved = hasProject && WorkspaceDirectorInputsMatchDocument();
+        UseWorkspaceStoryboardButton.IsEnabled = hasProject && CurrentVariants.Count > 0;
+        SaveWorkspaceDirectorButton.IsEnabled = hasProject && !saved;
+        PrepareWorkspacePromptsButton.IsEnabled = hasProject && saved && _directorDocument?["scenes"]?.AsArray().Count > 0;
+        GenerateWorkspaceDirectorButton.IsEnabled = hasProject && saved && _directorDocument?["scenes"]?.AsArray().Count > 0;
+        ReviewWorkspaceDirectorButton.IsEnabled = hasProject && !string.IsNullOrWhiteSpace(_session.SelectedJobId);
+        ApplyWorkspaceDirectorButton.IsEnabled = hasProject && !string.IsNullOrWhiteSpace(_directorReviewedJobId);
+    }
+
+    private void UseWorkspaceStoryboardButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetSelectedVariant(out PlanVariantDto variant))
+        {
+            ShowStatus("Storyboard required", "Generate or select a storyboard variant before staging Director scenes.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        var scenes = new JsonArray();
+        for (int index = 0; index < variant.Scenes.Count; index++)
+        {
+            PlanSceneDto scene = variant.Scenes[index];
+            long startSample = checked((long)Math.Round(scene.StartSeconds * 48_000, MidpointRounding.AwayFromZero));
+            long endSample = checked((long)Math.Round(scene.EndSeconds * 48_000, MidpointRounding.AwayFromZero));
+            var sceneObject = new JsonObject
+            {
+                ["scene_id"] = $"workspace-scene-{index + 1}",
+                ["start_sample"] = startSample.ToString(CultureInfo.InvariantCulture),
+                ["end_sample"] = endSample.ToString(CultureInfo.InvariantCulture),
+                ["intent"] = string.IsNullOrWhiteSpace(scene.Prompt) ? $"Scene {index + 1}" : scene.Prompt,
+                ["continuity_mode"] = "continuous",
+                ["camera"] = new JsonObject
+                {
+                    ["shot_type"] = scene.ShotType ?? string.Empty,
+                    ["movement"] = scene.Camera ?? string.Empty,
+                },
+                ["environment"] = new JsonObject
+                {
+                    ["location"] = scene.Setting ?? string.Empty,
+                },
+                ["renderer_hints"] = new JsonObject
+                {
+                    ["source"] = "workspace_storyboard",
+                    ["negative_prompt"] = scene.NegativePrompt ?? string.Empty,
+                    ["name"] = $"Scene {index + 1}",
+                },
+            };
+            var actions = new JsonArray();
+            if (!string.IsNullOrWhiteSpace(scene.Action))
+            {
+                actions.Add(scene.Action);
+            }
+            sceneObject["actions"] = actions;
+            JsonObject environment = sceneObject["environment"]!.AsObject();
+            var secondaryMotion = new JsonArray();
+            if (!string.IsNullOrWhiteSpace(scene.EnvironmentMotion))
+            {
+                secondaryMotion.Add(scene.EnvironmentMotion);
+            }
+            environment["secondary_motion"] = secondaryMotion;
+            if (!string.IsNullOrWhiteSpace(scene.CharacterLock))
+            {
+                sceneObject["subjects"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["id"] = "primary",
+                        ["role"] = "primary",
+                        ["appearance_lock"] = true,
+                        ["appearance_notes"] = new JsonArray(JsonValue.Create(scene.CharacterLock)),
+                    },
+                };
+            }
+            scenes.Add(sceneObject);
+        }
+
+        WorkspaceDirectorSceneSpecsTextBox.Text = scenes.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        if (string.IsNullOrWhiteSpace(WorkspaceDirectorThemeTextBox.Text))
+        {
+            WorkspaceDirectorThemeTextBox.Text = _projectResponse?.Project.Name ?? string.Empty;
+        }
+        if (string.IsNullOrWhiteSpace(WorkspaceDirectorStyleTextBox.Text))
+        {
+            WorkspaceDirectorStyleTextBox.Text = "Cinematic continuity";
+        }
+        WorkspaceDirectorStatusText.Text = $"{scenes.Count} storyboard scene(s) staged for Director. Save direction to commit them.";
+        UpdateDirectorWorkspaceAvailability();
+    }
+
+    private async void SaveWorkspaceDirectorButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_directorProjectId is not string projectId)
+        {
+            return;
+        }
+
+        await RunBusyAsync("Saving Director direction", async cancellationToken =>
+        {
+            JsonObject document = BuildWorkspaceDirectorDocument();
+            using JsonDocument payload = JsonDocument.Parse(document.ToJsonString());
+            JsonElement response = await App.Services.ApiClient.SaveDirectorDocumentAsync(
+                projectId,
+                new DirectorUpdateRequest(_directorRevision, payload.RootElement.Clone()),
+                cancellationToken);
+            ApplyDirectorWorkspaceDocument(response);
+            await RefreshProjectSnapshotAsync(projectId, cancellationToken);
+            WorkspaceDirectorStatusText.Text = "Story Bible and SceneSpecs saved to the shared Workspace project.";
+            ShowStatus("Director saved", "The direction is now available to Timeline, Render, Queue, and both Studio clients.", InfoBarSeverity.Success);
+        });
+    }
+
+    private async void PrepareWorkspacePromptsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_directorProjectId is not string projectId)
+        {
+            return;
+        }
+        if (!WorkspaceDirectorInputsMatchDocument())
+        {
+            ShowStatus("Save direction first", "Preparing prompts uses the saved project document. Save your current Workspace edits first.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        await RunBusyAsync("Preparing Director prompts", async cancellationToken =>
+        {
+            string engine = (WorkspaceDirectorEngineComboBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "hunyuan_video15";
+            JsonElement response = await App.Services.ApiClient.GetDirectorPromptsAsync(projectId, engine, cancellationToken);
+            WorkspaceDirectorPromptPreviewTextBox.Text = response.TryGetProperty("packages", out JsonElement packages)
+                ? string.Join(Environment.NewLine + Environment.NewLine, packages.EnumerateArray().Select(item => $"[{item.GetProperty("scene_id").GetString()}] {item.GetProperty("prompt").GetString()}"))
+                : string.Empty;
+            WorkspaceDirectorStatusText.Text = $"Prepared {packages.GetArrayLength()} {engine} prompt package(s). No generation job was submitted.";
+            ShowStatus("Prompts prepared", "The renderer-specific prompt package is ready for review.", InfoBarSeverity.Success);
+        });
+    }
+
+    private async void GenerateWorkspaceDirectorButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_directorProjectId is not string projectId)
+        {
+            return;
+        }
+        if (!WorkspaceDirectorInputsMatchDocument())
+        {
+            ShowStatus("Save direction first", "Generation requires a stable saved Workspace revision.", InfoBarSeverity.Warning);
+            return;
+        }
+        string instruction = WorkspaceDirectorInstructionTextBox.Text.Trim();
+        if (instruction.Length == 0)
+        {
+            ShowStatus("Direction required", "Enter an instruction for the Director draft.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        await RunBusyAsync("Generating Director draft", async cancellationToken =>
+        {
+            if (_directorPendingRequest is null ||
+                !string.Equals(_directorPendingRequest.Instruction, instruction, StringComparison.Ordinal) ||
+                _directorPendingRequest.ExpectedRevision != _directorRevision)
+            {
+                _directorPendingRequest = new DirectorGenerationRequest(_directorRevision, Guid.NewGuid().ToString(), instruction);
+            }
+            JsonElement response = await App.Services.ApiClient.GenerateDirectorAsync(projectId, _directorPendingRequest, cancellationToken);
+            string jobId = response.GetProperty("job_id").GetString() ?? string.Empty;
+            App.Services.Session.SetSelectedJob(projectId, jobId);
+            _directorPendingRequest = null;
+            _directorReviewedJobId = null;
+            WorkspaceDirectorDraftTextBox.Text = "Draft queued. Review it here after the queue reports completion.";
+            WorkspaceDirectorStatusText.Text = $"Director draft queued in the shared project queue ({jobId}).";
+            UpdateDirectorWorkspaceAvailability();
+            ShowStatus("Director draft queued", "Track progress or cancel the job in Queue, then review it here.", InfoBarSeverity.Success);
+        });
+    }
+
+    private async void ReviewWorkspaceDirectorButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_directorProjectId is not string projectId || string.IsNullOrWhiteSpace(_session.SelectedJobId))
+        {
+            ShowStatus("Director job required", "Generate a draft in Workspace or select its job in Queue first.", InfoBarSeverity.Warning);
+            return;
+        }
+
+        await RunBusyAsync("Reviewing Director draft", async cancellationToken =>
+        {
+            JsonElement response = await App.Services.ApiClient.GetDirectorDraftAsync(projectId, _session.SelectedJobId!, cancellationToken);
+            string status = response.GetProperty("status").GetString() ?? "unknown";
+            if (!string.Equals(status, "succeeded", StringComparison.OrdinalIgnoreCase))
+            {
+                _directorReviewedJobId = null;
+                WorkspaceDirectorDraftTextBox.Text = $"Job {status}: {response.GetProperty("error").GetString()}";
+                WorkspaceDirectorStatusText.Text = "The Director draft is not ready yet. Review again after the queue reports completion.";
+                UpdateDirectorWorkspaceAvailability();
+                return;
+            }
+
+            _directorReviewedJobId = _session.SelectedJobId;
+            WorkspaceDirectorDraftTextBox.Text = response.GetProperty("result").GetProperty("document").ToString();
+            WorkspaceDirectorStatusText.Text = "Draft loaded for review. Apply it only after checking the Story Bible and scene constraints.";
+            UpdateDirectorWorkspaceAvailability();
+            ShowStatus("Draft ready", "Review the draft, then apply it to the saved Workspace direction when approved.", InfoBarSeverity.Informational);
+        });
+    }
+
+    private async void ApplyWorkspaceDirectorButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_directorProjectId is not string projectId || string.IsNullOrWhiteSpace(_directorReviewedJobId))
+        {
+            return;
+        }
+
+        await RunBusyAsync("Applying Director draft", async cancellationToken =>
+        {
+            JsonElement response = await App.Services.ApiClient.ApplyDirectorDraftAsync(
+                projectId,
+                _directorReviewedJobId!,
+                new DirectorApplyRequest(_directorRevision),
+                cancellationToken);
+            ApplyDirectorWorkspaceDocument(response);
+            WorkspaceDirectorDraftTextBox.Text = "Reviewed Director draft applied to the shared Workspace direction.";
+            await RefreshProjectSnapshotAsync(projectId, cancellationToken);
+            WorkspaceDirectorStatusText.Text = "Director direction applied. Planner, Timeline, Render, and both clients now see the same project revision.";
+            ShowStatus("Director applied", "The reviewed draft is now the active project direction.", InfoBarSeverity.Success);
+        });
+    }
+
+    private void OpenFullDirectorButton_Click(object sender, RoutedEventArgs e) => NavigateTo("directorLab");
 
     private void PopulateOptionalWorkspaceData()
     {
@@ -1026,10 +1377,21 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         return result is null ? null : result.Path;
     }
 
-    private void SetWorkspaceMode(bool isStoryboard)
+    private static void EnsureSpecialistPage(Frame frame, Type pageType)
     {
-        OverviewPanel.Visibility = isStoryboard ? Visibility.Collapsed : Visibility.Visible;
+        if (frame.Content?.GetType() != pageType)
+        {
+            frame.Navigate(pageType);
+        }
+    }
+
+    private void SetWorkspaceMode(bool isStoryboard, bool isDirector, bool isPlanner, bool isReactive)
+    {
+        OverviewPanel.Visibility = isStoryboard || isDirector || isPlanner || isReactive ? Visibility.Collapsed : Visibility.Visible;
         StoryboardPanel.Visibility = isStoryboard ? Visibility.Visible : Visibility.Collapsed;
+        DirectorPanel.Visibility = isDirector ? Visibility.Visible : Visibility.Collapsed;
+        PlannerPanel.Visibility = isPlanner ? Visibility.Visible : Visibility.Collapsed;
+        ReactivePanel.Visibility = isReactive ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ClearWorkspace(string message)
@@ -1042,6 +1404,10 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         _liveCues = null;
         _liveAssets = null;
         _generatedPlan = null;
+        _directorDocument = null;
+        _directorProjectId = null;
+        _directorReviewedJobId = null;
+        _directorPendingRequest = null;
         AssetItems.Clear();
         VariantItems.Clear();
         StoryboardItems.Clear();
@@ -1052,6 +1418,13 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         LastOperationJsonTextBox.Text = "{}";
         PopulateOptionalWorkspaceData();
         PopulatePlanning();
+        WorkspaceDirectorThemeTextBox.Text = string.Empty;
+        WorkspaceDirectorStyleTextBox.Text = string.Empty;
+        WorkspaceDirectorSceneSpecsTextBox.Text = "[]";
+        WorkspaceDirectorPromptPreviewTextBox.Text = string.Empty;
+        WorkspaceDirectorDraftTextBox.Text = string.Empty;
+        WorkspaceDirectorStatusText.Text = message;
+        UpdateDirectorWorkspaceAvailability();
     }
 
     private void NavigateTo(string destination)

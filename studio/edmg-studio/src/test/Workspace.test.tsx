@@ -76,6 +76,29 @@ describe("Workspace page", () => {
         },
       },
       "/v1/projects/p1/assets": { assets: { refs: [] } },
+      "/v1/projects/p1/director/document": {
+        ok: true,
+        revision: 1,
+        document: {
+          version: 1,
+          story_bible: {
+            revision: 1,
+            project_theme: "Neon arrival",
+            visual_style: "Nocturnal 35mm realism",
+            characters: {},
+            locations: {},
+            continuity_rules: [],
+            forbidden_changes: [],
+          },
+          scenes: [],
+          analysis_revision: 1,
+        },
+      },
+      "POST /v1/projects/p1/director/document": (path, init) => ({
+        ok: true,
+        revision: 2,
+        document: JSON.parse(String(init?.body || "{}")).document,
+      }),
       "/v1/projects/p1/audio": {},
       "/v1/projects/p1/creative_direction*": {
         creative_direction: {
@@ -130,6 +153,14 @@ describe("Workspace page", () => {
 
     fireEvent.click(await screen.findByRole("tab", { name: /Reactive Lab/i }));
     expect(await screen.findByText("Reactive Lab + Renderer Handoff")).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Director/i }));
+    expect(await screen.findByText("EDMG Director")).toBeTruthy();
+    expect(await screen.findByText(/Director is embedded in this Workspace session/i)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Use selected storyboard" }));
+    expect(await screen.findByText(/selected storyboard scene/i)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: "Save direction" }));
+    expect(await screen.findByText(/saved to this Workspace project/i)).toBeTruthy();
   });
 
   it("reconciles a stale stored project id before loading project detail routes", async () => {
