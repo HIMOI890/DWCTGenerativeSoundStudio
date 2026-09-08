@@ -104,6 +104,10 @@ export default function DirectorWorkspacePanel({
   const [instruction, setInstruction] = useState("");
   const [scenesText, setScenesText] = useState("[]");
   const [engine, setEngine] = useState("hunyuan_video15");
+  const [readinessEngine, setReadinessEngine] = useState("automatic");
+  const [rendererMode, setRendererMode] = useState("automatic");
+  const [readiness, setReadiness] = useState<any>(null);
+  const [readinessLoading, setReadinessLoading] = useState(false);
   const [promptPreview, setPromptPreview] = useState("");
   const [draftText, setDraftText] = useState("");
   const [jobId, setJobId] = useState("");
@@ -118,6 +122,34 @@ export default function DirectorWorkspacePanel({
     () => scenesFromStoryboard(plan, selectedVariant),
     [plan, selectedVariant],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!projectId) {
+      setReadiness(null);
+      return undefined;
+    }
+    setReadinessLoading(true);
+    apiGet(
+      `/v1/projects/${encodeURIComponent(projectId)}/director/readiness?mode=${encodeURIComponent(rendererMode)}&engine=${encodeURIComponent(readinessEngine)}`,
+      { backendUrl },
+    )
+      .then((response) => {
+        if (!cancelled) setReadiness(response);
+      })
+      .catch((reason) => {
+        if (!cancelled) {
+          setReadiness(null);
+          onMutationError?.(reason);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setReadinessLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [backendUrl, onMutationError, projectId, readinessEngine, rendererMode]);
 
   const applyDocument = (response: any) => {
     const next = (response?.document || response) as DirectorDocument;
@@ -334,6 +366,33 @@ export default function DirectorWorkspacePanel({
         <div className="workspace-handoffCard"><div className="workspace-handoffLabel">Analysis</div><strong>{analysis ? "available" : "run analysis first"}</strong></div>
       </div>
 
+      <div className="workspace-directorReadiness">
+        <div className="workspace-directorReadinessHeader">
+          <div>
+            <div className="workspace-directorSubhead">Internal engine readiness</div>
+            <div className="small">The resolver checks the active hardware and model cache before any Director or renderer worker loads weights.</div>
+          </div>
+          {readinessLoading ? <span className="small">Checking…</span> : null}
+        </div>
+        <div className="workspace-directorReadinessControls">
+          <label className="workspace-directorField"><span>Renderer mode</span><select value={rendererMode} onChange={(event) => setRendererMode(event.target.value)} disabled={busy || readinessLoading}><option value="automatic">Automatic</option><option value="fast">Fast</option><option value="quality">Quality</option><option value="maximum">Maximum</option></select></label>
+          <label className="workspace-directorField"><span>Renderer override</span><select value={readinessEngine} onChange={(event) => setReadinessEngine(event.target.value)} disabled={busy || readinessLoading}><option value="automatic">Automatic engine</option><option value="hunyuan_video15">HunyuanVideo-1.5</option><option value="ltx_25">LTX-2.5</option><option value="external">External provider</option></select></label>
+        </div>
+        {readiness ? (
+          <>
+            <div className="workspace-directorReadinessGrid">
+              <div className="workspace-handoffCard"><div className="workspace-handoffLabel">Resolved Director</div><strong>{readiness.director?.label || "—"}</strong><span className="small">{readiness.director?.profile || "profile pending"}</span></div>
+              <div className="workspace-handoffCard"><div className="workspace-handoffLabel">Resolved renderer</div><strong>{readiness.renderer?.label || "—"}</strong><span className="small">{readiness.renderer?.profile || "profile pending"}</span></div>
+              <div className="workspace-handoffCard"><div className="workspace-handoffLabel">Hardware tier</div><strong>{readiness.hardware_tier || "unknown"}</strong><span className="small">{readiness.hardware?.device_name || readiness.hardware?.backend || "probe unavailable"}</span></div>
+              <div className="workspace-handoffCard"><div className="workspace-handoffLabel">Admission</div><strong className={readiness.ready ? "workspace-readinessReady" : "workspace-readinessBlocked"}>{readiness.ready ? "Ready" : "Blocked"}</strong><span className="small">No model load has been attempted.</span></div>
+            </div>
+            {Array.isArray(readiness.blockers) && readiness.blockers.length ? <div className="workspace-directorReadinessList"><strong>Blockers</strong><ul>{readiness.blockers.map((item: string, index: number) => <li key={`blocker-${index}`}>{item}</li>)}</ul></div> : null}
+            {Array.isArray(readiness.warnings) && readiness.warnings.length ? <div className="workspace-directorReadinessList"><strong>Resolution notes</strong><ul>{readiness.warnings.map((item: string, index: number) => <li key={`warning-${index}`}>{item}</li>)}</ul></div> : null}
+            {Array.isArray(readiness.actions) && readiness.actions.length ? <div className="workspace-directorReadinessList"><strong>Next actions</strong><ul>{readiness.actions.map((item: string, index: number) => <li key={`action-${index}`}>{item}</li>)}</ul></div> : null}
+          </>
+        ) : <div className="small">Readiness is unavailable until the Workspace backend responds.</div>}
+      </div>
+
       <div className="workspace-directorGrid">
         <div className="workspace-directorColumn">
           <label className="workspace-directorField"><span>Project theme</span><input value={theme} onChange={(event) => setTheme(event.target.value)} disabled={loading || busy} placeholder="Theme, subject, or world" /></label>
@@ -348,7 +407,7 @@ export default function DirectorWorkspacePanel({
         <div className="workspace-directorColumn">
           <div className="workspace-directorSubhead">Prepare and generate</div>
           <div className="small">Prompt preparation is deterministic and does not submit a job. Generation stays in the backend worker and returns a reviewable draft.</div>
-          <label className="workspace-directorField"><span>Prompt engine</span><select value={engine} onChange={(event) => setEngine(event.target.value)} disabled={busy || loading}><option value="hunyuan_video15">HunyuanVideo-1.5</option><option value="ltx_25">LTX-2.5</option><option value="external">External provider</option></select></label>
+          <label className="workspace-directorField"><span>Prompt compiler</span><select value={engine} onChange={(event) => setEngine(event.target.value)} disabled={busy || loading}><option value="hunyuan_video15">HunyuanVideo-1.5</option><option value="ltx_25">LTX-2.5</option><option value="external">External provider</option></select></label>
           <div className="row workspace-actionRow" style={{ gap: 8, flexWrap: "wrap" }}>
             <button className="secondary" type="button" onClick={() => void compilePrompts()} disabled={busy || loading || !document?.scenes?.length}>Prepare prompts</button>
             <button type="button" onClick={() => void generateDraft()} disabled={busy || loading || !document?.scenes?.length || revision == null}>Generate draft</button>

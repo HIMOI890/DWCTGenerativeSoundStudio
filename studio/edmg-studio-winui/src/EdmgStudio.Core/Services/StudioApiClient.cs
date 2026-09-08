@@ -697,6 +697,18 @@ public sealed class StudioApiClient : IDisposable
     public Task<JsonElement> GetDirectorDocumentAsync(string projectId, CancellationToken cancellationToken = default) =>
         SendJsonAsync<JsonElement>(HttpMethod.Get, $"/v1/projects/{EscapeIdentifier(projectId)}/director/document", null, true, cancellationToken);
 
+    public Task<JsonElement> GetDirectorReadinessAsync(
+        string projectId,
+        string mode,
+        string engine,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<JsonElement>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/director/readiness?mode={Uri.EscapeDataString(mode)}&engine={Uri.EscapeDataString(engine)}",
+            null,
+            true,
+            cancellationToken);
+
     public Task<JsonElement> GenerateDirectorAsync(string projectId, DirectorGenerationRequest request, CancellationToken cancellationToken = default) =>
         PostJsonAsync<DirectorGenerationRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/generate", request, cancellationToken);
 

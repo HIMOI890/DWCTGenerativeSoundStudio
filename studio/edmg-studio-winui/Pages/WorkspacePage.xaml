@@ -699,6 +699,53 @@
                                     Click="OpenFullDirectorButton_Click"
                                     Content="Open full Director" />
                             </Grid>
+                            <Border Padding="12" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="10">
+                                <StackPanel Spacing="8">
+                                    <Grid ColumnSpacing="10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox
+                                            x:Name="WorkspaceDirectorModeComboBox"
+                                            AutomationProperties.AutomationId="Workspace.Director.Mode"
+                                            Header="Renderer mode"
+                                            SelectionChanged="WorkspaceDirectorModeComboBox_SelectionChanged"
+                                            SelectedIndex="0">
+                                            <ComboBoxItem Content="Automatic" Tag="automatic" />
+                                            <ComboBoxItem Content="Fast" Tag="fast" />
+                                            <ComboBoxItem Content="Quality" Tag="quality" />
+                                            <ComboBoxItem Content="Maximum" Tag="maximum" />
+                                        </ComboBox>
+                                        <ComboBox
+                                            x:Name="WorkspaceDirectorReadinessEngineComboBox"
+                                            Grid.Column="1"
+                                            AutomationProperties.AutomationId="Workspace.Director.ReadinessEngine"
+                                            Header="Renderer override"
+                                            SelectionChanged="WorkspaceDirectorReadinessEngineComboBox_SelectionChanged"
+                                            SelectedIndex="0">
+                                            <ComboBoxItem Content="Automatic engine" Tag="automatic" />
+                                            <ComboBoxItem Content="HunyuanVideo-1.5" Tag="hunyuan_video15" />
+                                            <ComboBoxItem Content="LTX-2.5" Tag="ltx_25" />
+                                            <ComboBoxItem Content="External provider" Tag="external" />
+                                        </ComboBox>
+                                        <Button
+                                            x:Name="RefreshWorkspaceDirectorReadinessButton"
+                                            Grid.Column="2"
+                                            AutomationProperties.AutomationId="Workspace.Director.RefreshReadiness"
+                                            Click="RefreshWorkspaceDirectorReadinessButton_Click"
+                                            Content="Refresh readiness"
+                                            VerticalAlignment="Bottom" />
+                                    </Grid>
+                                    <TextBlock
+                                        x:Name="WorkspaceDirectorReadinessText"
+                                        AutomationProperties.AutomationId="Workspace.Director.Readiness"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        Text="Readiness has not been checked."
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
                             <Grid ColumnSpacing="12" RowSpacing="10">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />

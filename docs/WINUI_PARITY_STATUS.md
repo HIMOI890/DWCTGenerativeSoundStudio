@@ -28,7 +28,7 @@ are under `studio/edmg-studio-winui/tests/EdmgStudio.Core.Tests/`.
 | Review, traits, decisions and locks | Review.tsx | ReviewPage | StudioReviewSelectionTests, StudioApiClientTests | Cross-client review state and artifact fidelity |
 | Model catalog, licensing, installation | Models.tsx | ModelsPage | ModelRenderGuidanceTests, StudioApiClientTests | Manifest/revision/license controls and failure recovery |
 | Settings, runtime readiness, storage | Settings.tsx, Setup.tsx | SettingsPage, SetupPage | BackendSettingsStoreTests, BackendConfigurationTests, WindowsBackendTokenProviderTests | Native field parity, backend isolation, all error states |
-| Director workflows | EdmgDirector.tsx | Workspace Director mode, EdmgDirectorPage | StudioApiClientTests | Compare individual actions and saved intent |
+| Director workflows | EdmgDirector.tsx | Workspace Director mode, EdmgDirectorPage | StudioApiClientTests | Compare individual actions and saved intent; readiness mode/override payloads and live hardware blockers |
 | Cloud/provider controls | Cloud.tsx | CloudPage | StudioApiClientTests | Compare capabilities/locality and consent paths without provider spending |
 | Forge and advanced workbenches | StudioForge.tsx | StudioForgePage | StudioApiClientTests | Preserve existing controls; experimental extensions remain Labs |
 | Migration and recovery | Projects.tsx, Timeline.tsx, Setup.tsx | MigrationPage, TimelinePage, SetupPage | TimelineProjectionTests, BackendConfigurationTests | Interrupted writes, recovery and real previous-version migration |
@@ -56,6 +56,11 @@ certification. All remaining acceptance cells stay open until direct evidence is
   Workspace now hosts the existing planner/reactive pages in embedded Frames and
   the shared Director document editor, so all three use the active project session
   without requiring a sidebar handoff.
+- Add a shared Director readiness card to the native Workspace. Automatic, Fast,
+  Quality, and Maximum resolve against the detected hardware and display the
+  selected Director, renderer, profile, readiness state, and actionable blockers
+  before model loading. Electron exposes the same contract in its embedded
+  Director panel.
 
 ## Verification and blocked evidence
 

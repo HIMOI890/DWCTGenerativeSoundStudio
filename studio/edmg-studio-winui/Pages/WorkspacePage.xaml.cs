@@ -37,6 +37,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     private string? _directorProjectId;
     private string? _directorReviewedJobId;
     private DirectorGenerationRequest? _directorPendingRequest;
+    private JsonElement? _directorReadiness;
 
     public WorkspacePage()
     {
@@ -740,7 +741,124 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             $"{CurrentVariants.ElementAtOrDefault(_session.SelectedVariantIndex)?.Scenes.Count ?? 0} selected storyboard scene(s) · " +
             "analysis and timeline data remain shared with this Workspace session.";
         WorkspaceDirectorStatusText.Text = "Save direction before preparing prompts or generating a draft.";
+        await LoadDirectorReadinessAsync(projectId, cancellationToken);
         UpdateDirectorWorkspaceAvailability();
+    }
+
+    private string SelectedDirectorMode()
+    {
+        return (WorkspaceDirectorModeComboBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "automatic";
+    }
+
+    private string SelectedDirectorReadinessEngine()
+    {
+        return (WorkspaceDirectorReadinessEngineComboBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "automatic";
+    }
+
+    private async Task LoadDirectorReadinessAsync(string projectId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            JsonElement response = await App.Services.ApiClient.GetDirectorReadinessAsync(
+                projectId,
+                SelectedDirectorMode(),
+                SelectedDirectorReadinessEngine(),
+                cancellationToken);
+            if (_session.ActiveProjectId != projectId)
+            {
+                return;
+            }
+
+            _directorReadiness = response;
+            WorkspaceDirectorReadinessText.Text = FormatDirectorReadiness(response);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _directorReadiness = null;
+            WorkspaceDirectorReadinessText.Text = $"Readiness unavailable: {exception.Message}";
+        }
+    }
+
+    private static string FormatDirectorReadiness(JsonElement response)
+    {
+        string mode = response.TryGetProperty("requested_mode", out JsonElement modeValue)
+            ? modeValue.GetString() ?? "automatic"
+            : "automatic";
+        string tier = response.TryGetProperty("hardware_tier", out JsonElement tierValue)
+            ? tierValue.GetString() ?? "unknown"
+            : "unknown";
+        string profile = response.TryGetProperty("profile", out JsonElement profileValue)
+            ? profileValue.GetString() ?? "pending"
+            : "pending";
+        bool ready = response.TryGetProperty("ready", out JsonElement readyValue) && readyValue.ValueKind == JsonValueKind.True;
+        string director = "Director pending";
+        if (response.TryGetProperty("director", out JsonElement directorValue) && directorValue.ValueKind == JsonValueKind.Object)
+        {
+            string label = directorValue.TryGetProperty("label", out JsonElement labelValue) ? labelValue.GetString() ?? "Director" : "Director";
+            string directorProfile = directorValue.TryGetProperty("profile", out JsonElement directorProfileValue) ? directorProfileValue.GetString() ?? "profile pending" : "profile pending";
+            director = $"Director: {label} ({directorProfile})";
+        }
+        string renderer = "Renderer pending";
+        if (response.TryGetProperty("renderer", out JsonElement rendererValue) && rendererValue.ValueKind == JsonValueKind.Object)
+        {
+            string label = rendererValue.TryGetProperty("label", out JsonElement labelValue) ? labelValue.GetString() ?? "Renderer" : "Renderer";
+            string rendererProfile = rendererValue.TryGetProperty("profile", out JsonElement rendererProfileValue) ? rendererProfileValue.GetString() ?? "profile pending" : "profile pending";
+            renderer = $"Renderer: {label} ({rendererProfile})";
+        }
+
+        List<string> lines =
+        [
+            $"Mode: {mode} · hardware tier: {tier} · profile: {profile} · {(ready ? "ready" : "blocked")}",
+            director,
+            renderer,
+        ];
+        if (response.TryGetProperty("blockers", out JsonElement blockers) && blockers.ValueKind == JsonValueKind.Array)
+        {
+            string blockerText = string.Join(" | ", blockers.EnumerateArray().Select(item => item.GetString()).Where(item => !string.IsNullOrWhiteSpace(item)));
+            if (!string.IsNullOrWhiteSpace(blockerText))
+            {
+                lines.Add($"Blockers: {blockerText}");
+            }
+        }
+        if (response.TryGetProperty("warnings", out JsonElement warnings) && warnings.ValueKind == JsonValueKind.Array)
+        {
+            string warningText = string.Join(" | ", warnings.EnumerateArray().Select(item => item.GetString()).Where(item => !string.IsNullOrWhiteSpace(item)));
+            if (!string.IsNullOrWhiteSpace(warningText))
+            {
+                lines.Add($"Resolution notes: {warningText}");
+            }
+        }
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private async void RefreshWorkspaceDirectorReadinessButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_directorProjectId is not string projectId)
+        {
+            return;
+        }
+
+        await RunBusyAsync("Refreshing Director readiness", token => LoadDirectorReadinessAsync(projectId, token));
+    }
+
+    private async void WorkspaceDirectorModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_directorProjectId is string projectId && WorkspaceDirectorModeComboBox.SelectedItem is not null)
+        {
+            await RunBusyAsync("Refreshing Director readiness", token => LoadDirectorReadinessAsync(projectId, token));
+        }
+    }
+
+    private async void WorkspaceDirectorReadinessEngineComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_directorProjectId is string projectId && WorkspaceDirectorReadinessEngineComboBox.SelectedItem is not null)
+        {
+            await RunBusyAsync("Refreshing Director readiness", token => LoadDirectorReadinessAsync(projectId, token));
+        }
     }
 
     private void ApplyDirectorWorkspaceDocument(JsonElement response)
@@ -1408,6 +1526,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         _directorProjectId = null;
         _directorReviewedJobId = null;
         _directorPendingRequest = null;
+        _directorReadiness = null;
         AssetItems.Clear();
         VariantItems.Clear();
         StoryboardItems.Clear();
@@ -1423,6 +1542,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         WorkspaceDirectorSceneSpecsTextBox.Text = "[]";
         WorkspaceDirectorPromptPreviewTextBox.Text = string.Empty;
         WorkspaceDirectorDraftTextBox.Text = string.Empty;
+        WorkspaceDirectorReadinessText.Text = message;
         WorkspaceDirectorStatusText.Text = message;
         UpdateDirectorWorkspaceAvailability();
     }

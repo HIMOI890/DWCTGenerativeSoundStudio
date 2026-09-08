@@ -356,7 +356,17 @@ app.include_router(create_schedule_router(lambda: store))
 from .api.editor import create_editor_router
 app.include_router(create_editor_router(lambda: store))
 from .api.director import create_director_router
-app.include_router(create_director_router(lambda: store, lambda: jobs, lambda: models))
+app.include_router(
+    create_director_router(
+        lambda: store,
+        lambda: jobs,
+        lambda: models,
+        # The callback resolves after module initialization, so the router can
+        # be registered beside the other project services without duplicating
+        # hardware detection logic.
+        lambda: _hardware_profile(),
+    )
+)
 
 app.add_middleware(BackendSecurityMiddleware, settings=backend_security)
 

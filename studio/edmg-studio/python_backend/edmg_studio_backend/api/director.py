@@ -3,6 +3,13 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..domain.director_readiness import (
+    HIGH_TIER_DIRECTOR_MODEL_ID,
+    HUNYUAN_MODEL_ID,
+    LTX_MODEL_ID,
+    STANDARD_DIRECTOR_MODEL_ID,
+    resolve_director_readiness,
+)
 from ..domain.director_scene import DirectorDocument, compile_scene
 from ..revisions import RevisionRoute
 from ..services.qwen_director import validate_proposal
@@ -26,8 +33,80 @@ class DirectorApplyRequest(BaseModel):
     expected_revision: int = Field(ge=1, strict=True)
 
 
-def create_director_router(get_store, get_jobs=None, get_models=None):
+def create_director_router(get_store, get_jobs=None, get_models=None, get_hardware=None):
     router = APIRouter(route_class=RevisionRoute, tags=["director"])
+
+    def installed_models() -> dict[str, bool]:
+        """Return install/cache availability without loading any weights."""
+
+        model_ids = (
+            STANDARD_DIRECTOR_MODEL_ID,
+            HIGH_TIER_DIRECTOR_MODEL_ID,
+            HUNYUAN_MODEL_ID,
+            LTX_MODEL_ID,
+        )
+        service = get_models() if get_models is not None else None
+        if service is None:
+            return {model_id: False for model_id in model_ids}
+        available: dict[str, bool] = {}
+        try:
+            catalog = service.catalog()
+            if isinstance(catalog, dict) and isinstance(catalog.get("installed"), dict):
+                available.update(
+                    {
+                        str(model_id): bool(value)
+                        for model_id, value in catalog["installed"].items()
+                        if str(model_id) in model_ids
+                    }
+                )
+        except Exception:
+            # Readiness is diagnostic; an unavailable catalog must not take the
+            # project document or editor offline.
+            pass
+        for model_id in model_ids:
+            if model_id in available and available[model_id]:
+                continue
+            try:
+                available[model_id] = bool(service.installed_path(model_id))
+            except Exception:
+                available[model_id] = False
+        return available
+
+    def hardware_profile() -> dict:
+        if get_hardware is None:
+            return {}
+        try:
+            value = get_hardware()
+            return dict(value or {})
+        except Exception:
+            # A readiness card should show a blocked/unknown result rather than
+            # make the Workspace unusable when a platform probe fails.
+            return {}
+
+    @router.get("/v1/projects/{project_id}/director/readiness")
+    def readiness(
+        project_id: str,
+        mode: str = "automatic",
+        engine: str = "automatic",
+        allow_external: bool = False,
+    ):
+        project = get_store().get(project_id)
+        if project is None:
+            raise HTTPException(404, "Project not found")
+        try:
+            result = resolve_director_readiness(
+                hardware_profile(),
+                mode=mode,
+                engine=engine,
+                installed_models=installed_models(),
+                allow_external=allow_external,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        payload = result.model_dump(mode="json")
+        payload["project_id"] = project_id
+        payload["project_revision"] = project.revision
+        return {"ok": True, **payload}
 
     @router.post("/v1/projects/{project_id}/director/generate")
     def generate(project_id: str, request: DirectorGenerationRequest):
