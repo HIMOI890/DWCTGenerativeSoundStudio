@@ -18,6 +18,7 @@ SVD_CONDITIONING_FPS = 7
 SVD_MIN_GUIDANCE_SCALE = 1.0
 SVD_MAX_GUIDANCE_SCALE = 3.0
 ANIMATEDIFF_MAX_GUIDANCE_SCALE = 7.5
+HUNYUAN_DEFAULT_FPS = 24
 
 
 def validate_video_model_layout(engine: str, model_dir: Path) -> None:
@@ -25,10 +26,10 @@ def validate_video_model_layout(engine: str, model_dir: Path) -> None:
 
     engine_l = str(engine or "").strip().lower()
     model_dir = Path(model_dir)
-    if engine_l not in {"svd", "animatediff"}:
+    if engine_l not in {"svd", "animatediff", "hunyuan_video15"}:
         raise UserFacingError(
             f"Unknown internal video model engine: {engine}",
-            hint="Choose auto, SVD image-to-video, or AnimateDiff SD1.5.",
+            hint="Choose auto, SVD image-to-video, AnimateDiff SD1.5, or HunyuanVideo-1.5.",
             code="INTERNAL_VIDEO_MODEL_ENGINE_UNKNOWN",
             status_code=400,
         )
@@ -41,15 +42,28 @@ def validate_video_model_layout(engine: str, model_dir: Path) -> None:
             status_code=400,
         )
 
-    config_name = "model_index.json" if engine_l == "svd" else "config.json"
+    if engine_l == "svd":
+        config_names = ("model_index.json",)
+    elif engine_l == "animatediff":
+        config_names = ("config.json",)
+    else:
+        # Diffusers-compatible Hunyuan snapshots use model_index.json.  The
+        # upstream Tencent snapshot uses config.json, so accept both layouts
+        # and let the loader report missing runtime components precisely.
+        config_names = ("model_index.json", "config.json")
+    config_name = next((name for name in config_names if (model_dir / name).is_file()), config_names[0])
     config_path = model_dir / config_name
     if not config_path.is_file():
-        model_label = "SVD pipeline" if engine_l == "svd" else "AnimateDiff motion adapter"
+        model_label = {
+            "svd": "SVD pipeline",
+            "animatediff": "AnimateDiff motion adapter",
+            "hunyuan_video15": "HunyuanVideo-1.5 pipeline",
+        }[engine_l]
         raise UserFacingError(
             f"Selected internal video model is not a complete {model_label}",
             hint=(
                 f"Open Models and reinstall the {model_label}. The selected folder is missing "
-                f"{config_name}, so Studio will not start the render."
+                f"{', '.join(config_names)}, so Studio will not start the render."
             ),
             code="INTERNAL_VIDEO_MODEL_LAYOUT_INVALID",
             status_code=400,
@@ -66,8 +80,20 @@ def validate_video_model_layout(engine: str, model_dir: Path) -> None:
         ) from exc
 
     class_name = str(config.get("_class_name") or "") if isinstance(config, dict) else ""
-    expected_class = "StableVideoDiffusionPipeline" if engine_l == "svd" else "MotionAdapter"
-    if expected_class.lower() not in class_name.lower():
+    expected_class = {
+        "svd": "StableVideoDiffusionPipeline",
+        "animatediff": "MotionAdapter",
+        "hunyuan_video15": "HunyuanVideo15Pipeline",
+    }[engine_l]
+    class_matches = (
+        expected_class.lower() in class_name.lower()
+        if engine_l != "hunyuan_video15"
+        else any(
+            token in class_name.lower()
+            for token in ("hunyuanvideo15", "hunyuan_video_1_5", "hunyuanvideo_1_5")
+        )
+    )
+    if not class_matches:
         raise UserFacingError(
             "Selected internal video model does not match the adapter engine",
             hint=(
@@ -217,6 +243,15 @@ def _optimize_pipeline(pipe: Any, device: str, *, cpu_offload: bool) -> Any:
             pipe.enable_vae_tiling()
         except Exception as exc:
             logger.debug("Unable to enable VAE tiling for internal video pipeline: %s", exc)
+    # HunyuanVideo-1.5 exposes tiling on the VAE rather than the pipeline in
+    # current Diffusers releases. Keep this capability optional so older SVD
+    # and AnimateDiff fakes/runtimes remain compatible.
+    vae = getattr(pipe, "vae", None)
+    if vae is not None and hasattr(vae, "enable_tiling"):
+        try:
+            vae.enable_tiling()
+        except Exception as exc:
+            logger.debug("Unable to enable VAE tiling on internal video VAE: %s", exc)
     if (
         device == "cuda"
         and importlib.util.find_spec("xformers") is not None
@@ -351,6 +386,75 @@ def _load_animatediff_pipeline(
     return pipe
 
 
+def _load_hunyuan_pipeline(
+    model_dir: Path,
+    *,
+    device: str,
+    dtype: str,
+    cpu_offload: bool,
+    image_to_video: bool,
+):
+    """Load a Diffusers-compatible HunyuanVideo-1.5 pipeline lazily.
+
+    Hunyuan has separate T2V and I2V pipeline classes. Keeping them in the
+    cache under distinct keys prevents a text-to-video request from reusing an
+    image-to-video pipeline with an incompatible call contract.
+    """
+
+    try:
+        from diffusers import (  # type: ignore
+            HunyuanVideo15ImageToVideoPipeline,
+            HunyuanVideo15Pipeline,
+        )
+    except Exception as exc:
+        raise UserFacingError(
+            "Internal HunyuanVideo-1.5 support is not installed",
+            hint=(
+                "Install the reviewed internal-video runtime with HunyuanVideo-1.5 support, "
+                "then qualify the local model snapshot before enabling this renderer."
+            ),
+            code="INTERNAL_VIDEO_MODEL_DEPS",
+            status_code=500,
+        ) from exc
+
+    pipeline_kind = "hunyuan_video15_i2v" if image_to_video else "hunyuan_video15_t2v"
+    key = (pipeline_kind, str(model_dir), device, f"{dtype}|offload={int(bool(cpu_offload))}")
+    cached = _VIDEO_PIPELINE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    pipeline_cls = HunyuanVideo15ImageToVideoPipeline if image_to_video else HunyuanVideo15Pipeline
+    load_kwargs: dict[str, Any] = {"torch_dtype": _parse_torch_dtype(dtype, device)}
+    load_kwargs.update(_video_model_base_load_kwargs(model_dir, device))
+    try:
+        pipe = pipeline_cls.from_pretrained(str(model_dir), **load_kwargs)
+    except Exception as exc:
+        _reraise_video_model_load_error(exc, model_dir)
+    pipe = _optimize_pipeline(pipe, device, cpu_offload=cpu_offload)
+    _VIDEO_PIPELINE_CACHE[key] = pipe
+    return pipe
+
+
+def _configure_hunyuan_guidance(pipe: Any, cfg: float) -> None:
+    """Apply CFG through the Hunyuan guider without passing unsupported kwargs."""
+
+    guider = getattr(pipe, "guider", None)
+    guider_new = getattr(guider, "new", None)
+    if callable(guider_new):
+        try:
+            pipe.guider = guider_new(guidance_scale=float(cfg))
+            return
+        except Exception as exc:
+            logger.debug("Hunyuan guider rejected guidance scale: %s", exc)
+    # Older/fake pipelines may expose a mutable guidance_scale instead of a
+    # guider factory. This fallback is deliberately best-effort.
+    if hasattr(pipe, "guidance_scale"):
+        try:
+            pipe.guidance_scale = float(cfg)
+        except Exception:
+            pass
+
+
 def generate_video_model_frames(
     *,
     engine: str,
@@ -376,14 +480,15 @@ def generate_video_model_frames(
     """Generate PIL frames with an internal Diffusers video model.
 
     SVD is image-to-video and uses ``init_image``. AnimateDiff is text-to-video
-    through a motion adapter and uses the internal SD1.5 base model.
+    through a motion adapter and uses the internal SD1.5 base model. Hunyuan
+    selects its Diffusers T2V or I2V pipeline from the presence of ``init_image``.
     """
     if num_frames <= 0:
         return []
     if not video_model_dir.exists():
         raise UserFacingError(
             "Internal video model is not installed",
-            hint="Open Models and install an internal SVD or AnimateDiff video model, then retry.",
+            hint="Open Models and install a qualified internal video model, then retry.",
             code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED",
             status_code=400,
         )
@@ -392,6 +497,47 @@ def generate_video_model_frames(
     validate_video_model_layout(engine_l, video_model_dir)
     dtype_l = "float16" if str(dtype or "auto").strip().lower() == "auto" and device == "cuda" else str(dtype or "float32")
     generator, used_seed = _seeded_generator(seed, device)
+
+    if engine_l == "hunyuan_video15":
+        pipe = _load_hunyuan_pipeline(
+            video_model_dir,
+            device=device,
+            dtype=dtype_l,
+            cpu_offload=cpu_offload,
+            image_to_video=init_image is not None,
+        )
+        _configure_hunyuan_guidance(pipe, cfg)
+        kwargs: dict[str, Any] = {
+            "prompt": str(prompt or "cinematic subject motion"),
+            "negative_prompt": str(negative_prompt or ""),
+            "height": int(height),
+            "width": int(width),
+            "num_frames": int(num_frames),
+            "num_inference_steps": int(steps),
+            "generator": generator,
+            "output_type": "pil",
+        }
+        if init_image is not None:
+            kwargs["image"] = init_image.convert("RGB").resize((int(width), int(height)))
+        try:
+            # HunyuanVideo-1.5 configures classifier-free guidance through its
+            # guider; passing guidance_scale here is rejected by current
+            # Diffusers releases and would make a valid runtime fail early.
+            result = pipe(**kwargs)
+        except Exception as exc:
+            _cleanup_cuda(device)
+            if _is_cuda_out_of_memory(exc):
+                _raise_cuda_oom("HunyuanVideo-1.5", exc)
+            raise
+        frames = _normalize_frames(result)
+        if not frames:
+            raise RuntimeError(f"HunyuanVideo-1.5 returned no frames (seed={used_seed}).")
+        rgb_frames = _to_rgb_frames(frames, width=width, height=height)
+        if len(rgb_frames) != int(num_frames):
+            raise RuntimeError(
+                f"HunyuanVideo-1.5 returned {len(rgb_frames)} frames; expected {int(num_frames)} (seed={used_seed})."
+            )
+        return rgb_frames
 
     if engine_l == "svd":
         if init_image is None:
@@ -489,7 +635,7 @@ def generate_video_model_frames(
 
     raise UserFacingError(
         f"Unknown internal video model engine: {engine}",
-        hint="Choose auto, svd, or animatediff.",
+        hint="Choose auto, svd, animatediff, or hunyuan_video15.",
         code="INTERNAL_VIDEO_MODEL_ENGINE_UNKNOWN",
         status_code=400,
     )

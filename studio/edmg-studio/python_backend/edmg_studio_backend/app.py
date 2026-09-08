@@ -83,6 +83,13 @@ from .domain.director_modes import (
     normalize_director_mode,
     reactive_preset_for_mode,
 )
+from .domain.director_readiness import (
+    HIGH_TIER_DIRECTOR_MODEL_ID,
+    HUNYUAN_MODEL_ID,
+    LTX_MODEL_ID,
+    STANDARD_DIRECTOR_MODEL_ID,
+    resolve_director_readiness,
+)
 from .services.ai_client import build_ai_client
 from .services.edmg_core import (
     core_status,
@@ -10793,10 +10800,15 @@ def _hosted_render_preflight_data(
 TENSORRT_VIDEO_MODEL_ID = "local_sd15_tensorrt_bundle"
 INTERNAL_SVD_VIDEO_MODEL_ID = "hf_svd_xt_1_1_internal"
 INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID = "hf_animatediff_motion_adapter_v15_2_internal"
-INTERNAL_VIDEO_MODEL_IDS = (INTERNAL_SVD_VIDEO_MODEL_ID, INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID)
+INTERNAL_VIDEO_MODEL_IDS = (
+    INTERNAL_SVD_VIDEO_MODEL_ID,
+    INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID,
+    HUNYUAN_MODEL_ID,
+)
 INTERNAL_VIDEO_MODEL_ENGINES = {
     INTERNAL_SVD_VIDEO_MODEL_ID: "svd",
     INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID: "animatediff",
+    HUNYUAN_MODEL_ID: "hunyuan_video15",
 }
 
 
@@ -10821,11 +10833,12 @@ def _resolve_internal_video_model_selection(
     requested_model_id = str(payload.get("video_model_id") or "").strip()
     installed_svd = models.installed_path(INTERNAL_SVD_VIDEO_MODEL_ID)
     installed_ad = models.installed_path(INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID)
+    installed_hunyuan = models.installed_path(HUNYUAN_MODEL_ID)
 
-    if requested_engine not in {"auto", "svd", "animatediff"}:
+    if requested_engine not in {"auto", "svd", "animatediff", "hunyuan_video15"}:
         raise UserFacingError(
             "Selected internal video adapter engine is not supported",
-            hint="Choose Auto installed, SVD image-to-video, or AnimateDiff SD1.5.",
+            hint="Choose Auto installed, SVD image-to-video, AnimateDiff SD1.5, or HunyuanVideo-1.5.",
             code="INTERNAL_VIDEO_MODEL_ENGINE_UNKNOWN",
             status_code=400,
         )
@@ -10835,16 +10848,16 @@ def _resolve_internal_video_model_selection(
         if not expected_engine:
             raise UserFacingError(
                 "Selected model is not a supported internal video model",
-                hint="Open Models and select Stable Video Diffusion XT 1.1 or AnimateDiff Motion Adapter.",
+                hint="Open Models and select Stable Video Diffusion XT 1.1, AnimateDiff Motion Adapter, or HunyuanVideo-1.5.",
                 code="INTERNAL_VIDEO_MODEL_UNSUPPORTED",
                 status_code=400,
             )
         if requested_engine != "auto" and requested_engine != expected_engine:
-            expected_label = (
-                "Stable Video Diffusion XT 1.1"
-                if requested_engine == "svd"
-                else "AnimateDiff Motion Adapter"
-            )
+            expected_label = {
+                "svd": "Stable Video Diffusion XT 1.1",
+                "animatediff": "AnimateDiff Motion Adapter",
+                "hunyuan_video15": "HunyuanVideo-1.5",
+            }[requested_engine]
             raise UserFacingError(
                 "Selected internal video model does not match the adapter engine",
                 hint=(
@@ -10871,6 +10884,10 @@ def _resolve_internal_video_model_selection(
         path = installed_svd
         engine = "svd"
         requested_model_id = INTERNAL_SVD_VIDEO_MODEL_ID
+    elif requested_engine == "hunyuan_video15":
+        path = installed_hunyuan
+        engine = "hunyuan_video15"
+        requested_model_id = HUNYUAN_MODEL_ID
     elif installed_svd:
         path = installed_svd
         engine = "svd"
@@ -10886,14 +10903,50 @@ def _resolve_internal_video_model_selection(
 
     if not path:
         raise UserFacingError(
-            "No internal SVD or AnimateDiff video model is installed",
-            hint="Open Models and install Stable Video Diffusion XT 1.1 (Internal) or AnimateDiff Motion Adapter (Internal).",
+            "The selected internal video model is not installed",
+            hint="Open Models and install Stable Video Diffusion XT 1.1, AnimateDiff Motion Adapter, or the qualified HunyuanVideo-1.5 snapshot.",
             code="INTERNAL_VIDEO_MODEL_NOT_INSTALLED",
             status_code=400,
         )
 
     resolved_path = Path(path)
     internal_video_models.validate_video_model_layout(engine, resolved_path)
+
+    if engine == "hunyuan_video15":
+        # The Workspace readiness card is diagnostic, but this second
+        # resolution is authoritative at queue time. It prevents a manually
+        # crafted render request from loading a discovery-only Hunyuan snapshot
+        # before the adapter and hardware profile have passed qualification.
+        installed_for_readiness = {
+            HUNYUAN_MODEL_ID: bool(installed_hunyuan),
+            STANDARD_DIRECTOR_MODEL_ID: bool(models.installed_path(STANDARD_DIRECTOR_MODEL_ID)),
+            HIGH_TIER_DIRECTOR_MODEL_ID: bool(models.installed_path(HIGH_TIER_DIRECTOR_MODEL_ID)),
+            LTX_MODEL_ID: bool(models.installed_path(LTX_MODEL_ID)),
+        }
+        try:
+            readiness = resolve_director_readiness(
+                _hardware_profile(),
+                mode="automatic",
+                engine=engine,
+                installed_models=installed_for_readiness,
+                allow_external=False,
+            )
+        except ValueError as exc:
+            raise UserFacingError(
+                "HunyuanVideo-1.5 renderer admission could not be resolved",
+                hint="Refresh Workspace readiness and retry after the hardware probe completes.",
+                code="DIRECTOR_RENDERER_READINESS_INVALID",
+                status_code=422,
+            ) from exc
+        if not readiness.renderer.ready:
+            blockers = list(readiness.blockers) or [readiness.renderer.reason]
+            actions = list(readiness.actions)
+            raise UserFacingError(
+                "HunyuanVideo-1.5 is not admitted for local rendering",
+                hint=" ".join([*blockers, *actions]),
+                code="DIRECTOR_RENDERER_NOT_READY",
+                status_code=422,
+            )
 
     if engine == "animatediff" and str(base_model_family or "").lower() != "sd15":
         raise UserFacingError(
@@ -10915,7 +10968,7 @@ def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSetting
     backend = str(settings_obj.device_preference or "").strip().lower()
     if backend in {"", "auto"}:
         backend = str(hw.get("backend") or hw.get("device") or "cpu").lower()
-    if engine not in {"animatediff", "svd"} or backend != "cuda":
+    if engine not in {"animatediff", "svd", "hunyuan_video15"} or backend != "cuda":
         return settings_obj
     vram_gb = float(hw.get("vram_gb") or hw.get("cuda_vram_gb") or 0.0)
     updates: dict[str, Any] = {}
@@ -10924,20 +10977,26 @@ def _apply_internal_video_model_memory_safety(settings_obj: InternalVideoSetting
         if engine == "svd":
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 8)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 1)
-        else:
+        elif engine == "animatediff":
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
             updates["temporal_steps"] = min(int(settings_obj.temporal_steps or 18), 8)
+        else:
+            updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 8)
+            updates["video_model_decode_chunk_size"] = 1
     elif vram_gb and vram_gb <= 8.5:
         updates["video_model_cpu_offload"] = True
         if engine == "svd":
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
-        else:
+        elif engine == "animatediff":
             updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 16)
             updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 4)
             if settings_obj.temporal_steps is None or int(settings_obj.temporal_steps) > 10:
                 updates["temporal_steps"] = 10
+        else:
+            updates["video_model_max_frames_per_scene"] = min(int(settings_obj.video_model_max_frames_per_scene or 25), 12)
+            updates["video_model_decode_chunk_size"] = min(int(settings_obj.video_model_decode_chunk_size or 8), 2)
     return replace(settings_obj, **updates) if updates else settings_obj
 
 
@@ -10947,7 +11006,7 @@ def _internal_video_model_memory_warnings(settings_obj: InternalVideoSettings, h
     engine = str(settings_obj.video_model_engine or "").lower()
     if engine == "auto":
         engine = _video_model_engine_from_id(settings_obj.video_model_id)
-    if engine not in {"animatediff", "svd"}:
+    if engine not in {"animatediff", "svd", "hunyuan_video15"}:
         return []
     backend = str(settings_obj.device_preference or "").strip().lower()
     if backend in {"", "auto"}:
@@ -10960,16 +11019,24 @@ def _internal_video_model_memory_warnings(settings_obj: InternalVideoSettings, h
             return [
                 "6 GB CUDA SVD safety is active: Studio releases still-image pipelines before motion, enables CPU offload, caps SVD adapter frames to 8, uses decode chunks of 1, and renders the SVD adapter at a lower working canvas before resizing to the final video size. Inference steps are preserved because they affect render time rather than peak model allocation."
             ]
-        return [
+        if engine == "animatediff":
+            return [
             "6 GB CUDA AnimateDiff safety is active: Studio releases still-image pipelines before motion, enables CPU offload, caps adapter frames to 12, uses small decode chunks, and renders the adapter at a lower working canvas before resizing to the final video size. Inference steps are preserved because they affect render time rather than peak model allocation."
+            ]
+        return [
+            "6 GB CUDA HunyuanVideo-1.5 safety targets are active: Studio would use CPU offload, cap each temporal shot to 8 frames, decode in a single-frame chunk, and render a conservative adapter canvas. This profile remains unverified until fresh temporal output evidence passes."
         ]
     if vram_gb and vram_gb <= 8.5:
         if engine == "svd":
             return [
                 "8 GB CUDA SVD safety is active: Studio enables CPU offload, caps SVD adapter frames to 12, preserves inference steps, and uses smaller decode chunks."
             ]
+        if engine == "animatediff":
+            return [
+                "8 GB CUDA AnimateDiff safety is active: Studio enables CPU offload, caps adapter frames to 16, preserves inference steps, and uses smaller decode chunks."
+            ]
         return [
-            "8 GB CUDA AnimateDiff safety is active: Studio enables CPU offload, caps adapter frames to 16, preserves inference steps, and uses smaller decode chunks."
+            "8 GB CUDA HunyuanVideo-1.5 safety targets are active: Studio would use CPU offload, cap each temporal shot to 12 frames, and use small decode chunks. This profile remains unverified until fresh temporal output evidence passes."
         ]
     return []
 

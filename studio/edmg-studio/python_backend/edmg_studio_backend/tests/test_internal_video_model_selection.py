@@ -27,6 +27,15 @@ def _write_animatediff_layout(path: Path) -> Path:
     return path
 
 
+def _write_hunyuan_layout(path: Path) -> Path:
+    path.mkdir(parents=True)
+    (path / "model_index.json").write_text(
+        '{"_class_name": "HunyuanVideo15Pipeline"}',
+        encoding="utf-8",
+    )
+    return path
+
+
 def _install_lookup(tmp_path: Path, monkeypatch) -> dict[str, Path]:
     installed = {
         app_module.INTERNAL_SVD_VIDEO_MODEL_ID: _write_svd_layout(tmp_path / "svd"),
@@ -109,6 +118,30 @@ def test_invalid_selected_model_layout_fails_preflight(tmp_path: Path, monkeypat
         )
 
     assert exc.value.code == "INTERNAL_VIDEO_MODEL_LAYOUT_INVALID"
+
+
+def test_hunyuan_selection_is_blocked_until_renderer_admission_is_qualified(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hunyuan = _write_hunyuan_layout(tmp_path / "hunyuan")
+    installed = {
+        app_module.INTERNAL_SVD_VIDEO_MODEL_ID: None,
+        app_module.INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID: None,
+        app_module.HUNYUAN_MODEL_ID: hunyuan,
+    }
+    monkeypatch.setattr(app_module.models, "installed_path", installed.get)
+
+    with pytest.raises(UserFacingError) as exc:
+        app_module._resolve_internal_video_model_selection(
+            {
+                "video_model_engine": "hunyuan_video15",
+                "video_model_id": app_module.HUNYUAN_MODEL_ID,
+            },
+            base_model_family="sd15",
+        )
+
+    assert exc.value.code == "DIRECTOR_RENDERER_NOT_READY"
+    assert "not release-qualified" in (exc.value.hint or "")
 
 
 def test_public_render_job_error_preserves_only_curated_details() -> None:
