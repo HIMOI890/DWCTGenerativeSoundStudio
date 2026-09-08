@@ -1,6 +1,8 @@
 """Project-owned Director state; preparing prompts never submits generation."""
 
 from fastapi import APIRouter, HTTPException
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..domain.director_readiness import (
@@ -26,6 +28,9 @@ class DirectorGenerationRequest(BaseModel):
     expected_revision: int = Field(ge=1, strict=True)
     operation_id: str = Field(min_length=1, max_length=128)
     instruction: str = Field(min_length=1, max_length=16000)
+    mode: Literal["automatic", "fast", "quality", "maximum"] = "automatic"
+    renderer_engine: str = Field(default="automatic", min_length=1, max_length=80)
+    allow_external: bool = False
 
 
 class DirectorApplyRequest(BaseModel):
@@ -117,10 +122,39 @@ def create_director_router(get_store, get_jobs=None, get_models=None, get_hardwa
             raise HTTPException(404, "Project not found")
         if project.revision != request.expected_revision:
             raise HTTPException(409, "Project changed; refresh direction before generating")
-        model_id = "hf_qwen3_vl_8b_director"
+        model_id = STANDARD_DIRECTOR_MODEL_ID
+        readiness_snapshot = None
+        if get_hardware is not None:
+            try:
+                readiness = resolve_director_readiness(
+                    hardware_profile(),
+                    mode=request.mode,
+                    engine=request.renderer_engine,
+                    installed_models=installed_models(),
+                    allow_external=request.allow_external,
+                )
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            if not readiness.director.ready:
+                raise HTTPException(
+                    422,
+                    {
+                        "message": readiness.director.reason,
+                        "hint": " ".join(readiness.blockers or readiness.actions),
+                        "code": "DIRECTOR_NOT_READY",
+                    },
+                )
+            model_id = readiness.director.model_id
+            readiness_snapshot = {
+                "mode": readiness.requested_mode,
+                "renderer_engine": readiness.requested_engine,
+                "director": readiness.director.model_dump(mode="json"),
+                "renderer": readiness.renderer.model_dump(mode="json"),
+                "hardware_tier": readiness.hardware_tier,
+            }
         if get_models().installed_path(model_id) is None:
             raise HTTPException(
-                422, "Install Qwen3-VL-8B Director in Models before generating direction"
+                422, f"Install the resolved Director model ({model_id}) in Models before generating direction"
             )
         document = DirectorDocument.model_validate(project.meta.get("director_document") or {})
         if not document.scenes:
@@ -130,7 +164,12 @@ def create_director_router(get_store, get_jobs=None, get_models=None, get_hardwa
             "instruction": request.instruction,
             "source_revision": project.revision,
             "model_id": model_id,
+            "mode": request.mode,
+            "renderer_engine": request.renderer_engine,
+            "allow_external": request.allow_external,
         }
+        if readiness_snapshot is not None:
+            payload["readiness"] = readiness_snapshot
         job = get_jobs().create(
             project_id, "qwen_director", payload, idempotency_key="director:" + request.operation_id
         )

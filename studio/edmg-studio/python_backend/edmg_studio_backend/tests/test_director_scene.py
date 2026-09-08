@@ -140,6 +140,50 @@ def test_director_queue_is_idempotent_and_never_applies_draft(tmp_path):
         assert client.post(path, json={**body, "operation_id": "direction-2"}).status_code == 422
 
 
+def test_director_generation_persists_resolved_workspace_policy(tmp_path):
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("Resolved Director")
+    project.meta["director_document"] = DirectorDocument(scenes=[scene()]).model_dump(mode="json")
+    store.save(project)
+    jobs = JobStore(tmp_path / "projects")
+
+    class Models:
+        def installed_path(self, _model_id):
+            return tmp_path
+
+    app = FastAPI()
+    app.include_router(
+        create_director_router(
+            lambda: store,
+            lambda: jobs,
+            lambda: Models(),
+            lambda: {"backend": "cpu", "ram_gb": 32.0, "cpu_threads": 16},
+        )
+    )
+    with TestClient(app) as client:
+        path = f"/v1/projects/{project.id}/director/generate"
+        response = client.post(
+            path,
+            json={
+                "expected_revision": project.revision,
+                "operation_id": "resolved-policy-1",
+                "instruction": "Keep the approved character identity and add a slow camera move.",
+                "mode": "fast",
+                "renderer_engine": "external",
+                "allow_external": True,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    job = jobs.get(project.id, response.json()["job_id"])
+    assert job.payload["model_id"] == "hf_qwen3_vl_8b_director"
+    assert job.payload["mode"] == "fast"
+    assert job.payload["renderer_engine"] == "external"
+    assert job.payload["allow_external"] is True
+    assert job.payload["readiness"]["director"]["ready"] is True
+    assert job.payload["readiness"]["renderer"]["engine"] == "external"
+
+
 def test_reviewed_draft_apply_checks_baseline_and_preserves_job(tmp_path):
     store = ProjectStore(tmp_path / "projects")
     project = store.create("Draft review")

@@ -282,7 +282,16 @@ export default function DirectorWorkspacePanel({
     try {
       const response = await apiPost(
         `/v1/projects/${encodeURIComponent(projectId)}/director/generate`,
-        expectedRevisionBody({ operation_id: `workspace-director-${Date.now()}`, instruction: instruction.trim() }, { revision }),
+        expectedRevisionBody(
+          {
+            operation_id: `workspace-director-${Date.now()}`,
+            instruction: instruction.trim(),
+            mode: rendererMode,
+            renderer_engine: readinessEngine,
+            allow_external: false,
+          },
+          { revision },
+        ),
         { backendUrl },
       );
       const nextJobId = String(response?.job_id || "");
