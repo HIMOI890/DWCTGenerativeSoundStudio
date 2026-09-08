@@ -1095,11 +1095,21 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
         await RunBusyAsync("Generating Director draft", async cancellationToken =>
         {
+            string mode = SelectedDirectorMode();
+            string rendererEngine = SelectedDirectorReadinessEngine();
             if (_directorPendingRequest is null ||
                 !string.Equals(_directorPendingRequest.Instruction, instruction, StringComparison.Ordinal) ||
-                _directorPendingRequest.ExpectedRevision != _directorRevision)
+                _directorPendingRequest.ExpectedRevision != _directorRevision ||
+                !string.Equals(_directorPendingRequest.Mode, mode, StringComparison.Ordinal) ||
+                !string.Equals(_directorPendingRequest.RendererEngine, rendererEngine, StringComparison.Ordinal))
             {
-                _directorPendingRequest = new DirectorGenerationRequest(_directorRevision, Guid.NewGuid().ToString(), instruction);
+                _directorPendingRequest = new DirectorGenerationRequest(
+                    _directorRevision,
+                    Guid.NewGuid().ToString(),
+                    instruction,
+                    mode,
+                    rendererEngine,
+                    false);
             }
             JsonElement response = await App.Services.ApiClient.GenerateDirectorAsync(projectId, _directorPendingRequest, cancellationToken);
             string jobId = response.GetProperty("job_id").GetString() ?? string.Empty;

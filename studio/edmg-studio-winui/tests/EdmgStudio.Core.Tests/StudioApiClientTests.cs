@@ -10,6 +10,23 @@ namespace EdmgStudio.Core.Tests;
 public sealed class StudioApiClientTests
 {
     [TestMethod]
+    public void DirectorGenerationRequest_UsesSharedWorkspacePolicyFields()
+    {
+        string json = JsonSerializer.Serialize(
+            new DirectorGenerationRequest(
+                9,
+                "director-op",
+                "Keep the approved identity.",
+                "quality",
+                "hunyuan_video15",
+                false));
+        using JsonDocument body = JsonDocument.Parse(json);
+        Assert.AreEqual("quality", body.RootElement.GetProperty("mode").GetString());
+        Assert.AreEqual("hunyuan_video15", body.RootElement.GetProperty("renderer_engine").GetString());
+        Assert.IsFalse(body.RootElement.GetProperty("allow_external").GetBoolean());
+    }
+
+    [TestMethod]
     public async Task EditorCommands_KeepExactSamplesAndOperationIdentity()
     {
         string? capturedBody = null;

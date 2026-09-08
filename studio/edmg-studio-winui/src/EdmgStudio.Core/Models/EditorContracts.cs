@@ -10,7 +10,10 @@ public sealed record DirectorUpdateRequest(
 public sealed record DirectorGenerationRequest(
     [property: JsonPropertyName("expected_revision")] long ExpectedRevision,
     [property: JsonPropertyName("operation_id")] string OperationId,
-    [property: JsonPropertyName("instruction")] string Instruction);
+    [property: JsonPropertyName("instruction")] string Instruction,
+    [property: JsonPropertyName("mode")] string Mode = "automatic",
+    [property: JsonPropertyName("renderer_engine")] string RendererEngine = "automatic",
+    [property: JsonPropertyName("allow_external")] bool AllowExternal = false);
 
 public sealed record DirectorApplyRequest(
     [property: JsonPropertyName("expected_revision")] long ExpectedRevision);

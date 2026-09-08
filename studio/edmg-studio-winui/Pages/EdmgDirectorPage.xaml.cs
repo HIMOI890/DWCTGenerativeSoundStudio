@@ -325,8 +325,20 @@ public sealed partial class EdmgDirectorPage : Page, IStudioRefreshable
         {
             string instruction = DirectorInstructionBox.Text.Trim();
             if (instruction.Length == 0) throw new InvalidOperationException("Enter direction for Qwen3-VL first.");
-            if (_pendingDirectorRequest is null || _pendingDirectorRequest.Instruction != instruction || _pendingDirectorRequest.ExpectedRevision != _directorRevision)
-                _pendingDirectorRequest = new(_directorRevision, Guid.NewGuid().ToString(), instruction);
+            string rendererEngine = (PromptEngineBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "hunyuan_video15";
+            if (_pendingDirectorRequest is null ||
+                _pendingDirectorRequest.Instruction != instruction ||
+                _pendingDirectorRequest.ExpectedRevision != _directorRevision ||
+                !string.Equals(_pendingDirectorRequest.RendererEngine, rendererEngine, StringComparison.Ordinal))
+            {
+                _pendingDirectorRequest = new(
+                    _directorRevision,
+                    Guid.NewGuid().ToString(),
+                    instruction,
+                    "automatic",
+                    rendererEngine,
+                    false);
+            }
             JsonElement response = await App.Services.ApiClient.GenerateDirectorAsync(projectId, _pendingDirectorRequest, token);
             token.ThrowIfCancellationRequested();
             App.Services.Session.SetSelectedJob(projectId, response.GetProperty("job_id").GetString());
