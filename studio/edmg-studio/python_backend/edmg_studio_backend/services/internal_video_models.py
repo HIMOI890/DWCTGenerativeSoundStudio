@@ -26,6 +26,13 @@ def validate_video_model_layout(engine: str, model_dir: Path) -> None:
 
     engine_l = str(engine or "").strip().lower()
     model_dir = Path(model_dir)
+    if engine_l == "ltx_25":
+        from .engine_packages import MANIFESTS, validate_package
+        result = validate_package(model_dir, MANIFESTS["hf_ltx_25_distilled_internal"])
+        if not result["valid"]:
+            raise UserFacingError("LTX-2.5 package is incomplete", hint="; ".join(result["issues"]),
+                                  code="INTERNAL_VIDEO_MODEL_LAYOUT_INVALID", status_code=400)
+        return
     if engine_l not in {"svd", "animatediff", "hunyuan_video15"}:
         raise UserFacingError(
             f"Unknown internal video model engine: {engine}",
@@ -494,6 +501,10 @@ def generate_video_model_frames(
         )
 
     engine_l = str(engine or "svd").strip().lower()
+    if engine_l == "ltx_25":
+        from .engine_packages import RUNTIME_BLOCKERS
+        raise UserFacingError("LTX-2.5 execution adapter is not ready",
+            hint=" ".join(RUNTIME_BLOCKERS["ltx_25"]), code="DIRECTOR_RENDERER_NOT_READY", status_code=422)
     validate_video_model_layout(engine_l, video_model_dir)
     dtype_l = "float16" if str(dtype or "auto").strip().lower() == "auto" and device == "cuda" else str(dtype or "float32")
     generator, used_seed = _seeded_generator(seed, device)

@@ -8,6 +8,18 @@ from edmg_studio_backend import app as app_module
 from edmg_studio_backend.errors import UserFacingError
 
 
+def test_ltx_selection_is_registered_but_never_bypasses_runtime_admission(tmp_path, monkeypatch):
+    installed = _install_lookup(tmp_path, monkeypatch)
+    installed[app_module.LTX_MODEL_ID] = tmp_path / "ltx"
+    monkeypatch.setattr(app_module, "_hardware_profile", lambda: {"backend": "cuda", "vram_gb": 80, "ram_gb": 128})
+    for engine in ("auto", "ltx_25"):
+        with pytest.raises(UserFacingError) as exc:
+            app_module._resolve_internal_video_model_selection(
+                {"video_model_engine": engine, "video_model_id": app_module.LTX_MODEL_ID}, base_model_family="sd15")
+        assert exc.value.code == "DIRECTOR_RENDERER_NOT_READY"
+        assert "LTX-2.5" in exc.value.hint
+
+
 def _write_svd_layout(path: Path) -> Path:
     path.mkdir(parents=True)
     (path / "model_index.json").write_text(

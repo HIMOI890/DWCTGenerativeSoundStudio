@@ -80,18 +80,20 @@ type CatalogEntry = {
   };
 };
 
-type InternalVideoModelEngine = "auto" | "svd" | "animatediff";
+type InternalVideoModelEngine = "auto" | "svd" | "animatediff" | "hunyuan_video15" | "ltx_25";
 type ExplicitInternalVideoModelEngine = Exclude<InternalVideoModelEngine, "auto">;
 type KeyframeContinuityMode = "scene" | "project";
 
 const CANONICAL_INTERNAL_VIDEO_MODEL_IDS: Record<ExplicitInternalVideoModelEngine, string> = {
   svd: "hf_svd_xt_1_1_internal",
   animatediff: "hf_animatediff_motion_adapter_v15_2_internal",
+  hunyuan_video15: "hf_hunyuan_video15_internal",
+  ltx_25: "hf_ltx_25_distilled_internal",
 };
 
 function normalizeInternalVideoModelEngine(value: unknown): InternalVideoModelEngine {
   const engine = String(value || "auto").trim().toLowerCase();
-  return engine === "svd" || engine === "animatediff" ? engine : "auto";
+  return engine === "svd" || engine === "animatediff" || engine === "hunyuan_video15" || engine === "ltx_25" ? engine : "auto";
 }
 
 function normalizeKeyframeContinuityMode(value: unknown): KeyframeContinuityMode {
@@ -100,7 +102,7 @@ function normalizeKeyframeContinuityMode(value: unknown): KeyframeContinuityMode
 
 function declaredInternalVideoModelEngine(model: CatalogEntry | null | undefined): ExplicitInternalVideoModelEngine | null {
   const engine = String(model?.render?.video_model_engine || "").trim().toLowerCase();
-  return engine === "svd" || engine === "animatediff" ? engine : null;
+  return engine === "svd" || engine === "animatediff" || engine === "hunyuan_video15" || engine === "ltx_25" ? engine : null;
 }
 
 type SelectedLora = {
@@ -508,6 +510,8 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
     return {
       svd: resolveCanonical("svd"),
       animatediff: resolveCanonical("animatediff"),
+      hunyuan_video15: resolveCanonical("hunyuan_video15"),
+      ltx_25: resolveCanonical("ltx_25"),
     };
   }, [internalVideoModelOptions]);
   const filteredInternalVideoModelOptions = useMemo(
@@ -3055,7 +3059,7 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
                      <div style={{ minWidth: 190 }}>
                        <div className="small">Temporal mode</div>
                        <select value={effectiveInternalTemporalMode} disabled={internalMotionStrategy === "storyboard_full_motion"} onChange={(e) => setInternalTemporalMode(e.target.value as any)}>
-                         <option value="video_model">Internal video model (SVD / AnimateDiff)</option>
+                         <option value="video_model">Internal video model</option>
                          <option value="frame_img2img">Internal motion (frame img2img)</option>
                          <option value="keyframes">Keyframe assembly only</option>
                          <option value="off">Off (still keyframes)</option>
@@ -3129,10 +3133,12 @@ export default function Render({ onNavigate, backendUrl: backendUrlProp }: Rende
                          ) : null}
                          <div style={{ minWidth: 160 }}>
                            <div className="small">Adapter engine</div>
-                            <select value={internalVideoModelEngine} onChange={(e) => selectInternalVideoModelEngine(e.target.value)}>
+                            <select aria-label="Internal video engine" value={internalVideoModelEngine} onChange={(e) => selectInternalVideoModelEngine(e.target.value)}>
                              <option value="auto">Auto installed</option>
                              <option value="svd">SVD image-to-video</option>
                              <option value="animatediff">AnimateDiff SD1.5</option>
+                             <option value="hunyuan_video15">HunyuanVideo-1.5 (runtime pending)</option>
+                             <option value="ltx_25">LTX-2.5 Distilled (runtime pending)</option>
                            </select>
                          </div>
                         <div style={{ minWidth: 280 }}>

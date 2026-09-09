@@ -25,6 +25,13 @@ from ..domain.model_lanes import (
     promotion_blockers,
 )
 from ..errors import UserFacingError
+from .engine_packages import (
+    checked_files,
+    package_manifest,
+    runtime_status,
+    safe_file,
+    validate_package,
+)
 from .hf_auth import HfTokenCandidate, hf_token_candidates
 from .model_catalog import built_in_catalog, built_in_packs
 from .model_weights import is_real_weight_file
@@ -1098,7 +1105,7 @@ class ModelManager:
         )
 
     # ---- catalog ----
-    def catalog(self) -> dict[str, Any]:
+    def catalog(self, hardware: dict[str, Any] | None = None) -> dict[str, Any]:
         built = [_normalize_catalog_entry(entry) for entry in built_in_catalog()]
         user = _read_json(self._user_models_path, default=[])
         if not isinstance(user, list):
@@ -1131,7 +1138,10 @@ class ModelManager:
         user = [_apply_lane(entry) for entry in user]
 
         installed = self._installed_map(built + user)
-        cloud = self._cloud_models()
+        cloud = {key: value for key, value in self._cloud_models().items() if package_manifest(key) is None}
+        for entry in built:
+            if package_manifest(entry["id"]):
+                entry["package_status"] = self.engine_package_status(entry["id"], hardware)
 
         return {
             "catalog": built,
@@ -1280,6 +1290,9 @@ class ModelManager:
                 hint="Open Model Manager, click the model, review license, then click Accept & Install."
             )
 
+        if package_manifest(model_id):
+            return self.tasks.start(f"Install: {entry.get('name')}", self._install_engine_package, entry)
+
         source = (entry.get("source") or "").lower()
         if source == "ollama":
             name = f"Install (Ollama): {entry.get('name')}"
@@ -1289,6 +1302,113 @@ class ModelManager:
             return self.tasks.start(name, self._install_file_model, entry)
 
         raise UserFacingError("Unsupported model source", hint=f"Source '{source}' is not supported yet.")
+
+    def engine_package_status(self, model_id: str, hardware: dict[str, Any] | None = None) -> dict[str, Any]:
+        manifest = package_manifest(model_id)
+        entry = self._find_entry(model_id)
+        if manifest is None or entry is None:
+            raise UserFacingError("Unknown managed engine package", code="MODEL_PACKAGE_UNKNOWN")
+        _, dest = self._models_dest(entry)
+        validation = validate_package(dest, manifest)
+        installed = bool(validation["valid"]) and not self._snapshot_has_incomplete_markers(dest)
+        status = runtime_status(model_id, hardware)
+        status.update(installed=installed, state="installed" if installed else "installable",
+                      files_present=dest.exists(), validation_issues=validation["issues"],
+                      download_size_bytes=sum(item["size_bytes"] for item in manifest["files"]))
+        if not installed:
+            status["blockers"].insert(0, "Install or revalidate the required package files in Models.")
+        return status
+
+    def _validate_engine_package(self, task: ModelTask, entry: dict[str, Any]) -> None:
+        manifest = package_manifest(entry["id"])
+        _, dest = self._models_dest(entry)
+        self.tasks.set_stage(task, "validating", progress=0.90)
+        receipt = safe_file(dest, "model.json")
+        receipt.unlink(missing_ok=True)
+        result = validate_package(dest, manifest, verify_hashes=True,
+            cancel_check=lambda: self._raise_if_task_cancelled(task, boundary="package validation"))
+        if not result["valid"] or self._snapshot_has_incomplete_markers(dest):
+            raise UserFacingError("Engine package validation failed",
+                hint="; ".join(result["issues"]) or "Incomplete download markers remain; retry installation.",
+                code="MODEL_PACKAGE_INVALID")
+        self._raise_if_task_cancelled(task, boundary="package publication")
+        _write_json(receipt, result)
+        self.tasks.set_stage(task, "complete", progress=1.0)
+
+    def validate_engine_package(self, model_id: str) -> ModelTask:
+        entry = self._find_entry(model_id)
+        if entry is None or package_manifest(model_id) is None:
+            raise UserFacingError("Unknown managed engine package", code="MODEL_PACKAGE_UNKNOWN")
+        return self.tasks.start(f"Validate: {entry['name']}", self._validate_engine_package, entry)
+
+    def _install_engine_package(self, task: ModelTask, entry: dict[str, Any]) -> None:
+        manifest = package_manifest(entry["id"])
+        files = checked_files(manifest)
+        if self._model_storage_mode() == "cloud_only":
+            raise UserFacingError("Engine packages require local storage",
+                hint="Select local + cache storage in Settings, then install the package.", code="MODEL_PACKAGE_LOCAL_REQUIRED")
+        _, dest = self._models_dest(entry)
+        dest.mkdir(parents=True, exist_ok=True)
+        for existing in dest.rglob("*"):
+            safe_file(dest, existing.relative_to(dest).as_posix())
+        for item in files:
+            safe_file(dest, item["path"])
+        if self._internal_asset_installed(entry, dest):
+            self.tasks.set_stage(task, "complete", progress=1.0)
+            return
+        safe_file(dest, "model.json").unlink(missing_ok=True)
+        # Hub may trust its own local metadata for an existing file. Remove only
+        # corrupt managed artifacts so retry actually repairs them; retain valid
+        # siblings and the resumable transport cache.
+        for item in files:
+            candidate = safe_file(dest, item["path"])
+            if candidate.is_file():
+                check = validate_package(dest, {**manifest, "files": [item]}, verify_hashes=True,
+                    cancel_check=lambda: self._raise_if_task_cancelled(task, boundary="package repair"))
+                if not check["valid"]:
+                    candidate.unlink()
+        remaining = sum(item["size_bytes"] for item in files
+                        if not (dest / item["path"]).is_file() or (dest / item["path"]).stat().st_size != item["size_bytes"])
+        if shutil.disk_usage(dest).free < remaining + 1024**3:
+            raise UserFacingError("Insufficient disk space for engine package",
+                hint=f"Allow {remaining / 1024**3:.1f} GiB plus 1 GiB working space.", code="MODEL_PACKAGE_DISK_SPACE")
+        candidates = hf_token_candidates(secrets_store=self.secrets)
+        self.tasks.set_stage(task, "downloading", progress=0.05)
+        self._append_task_log(task, f"Downloading exactly {len(files)} pinned package files from {manifest['repo_id']}.")
+        # Bypass broad metadata profiles and cloud archives: neither can enforce
+        # this package's exact allowlist. Hub local_dir preserves subdirectories.
+        self._run_hf_download_with_auth_fallback(task, resource=manifest["repo_id"], candidates=candidates,
+            download=lambda token: self._download_hf_snapshot(task,
+                repo_id=manifest["repo_id"], revision=manifest["revision"], token=token,
+                local_dir=str(dest), allow_patterns=[item["path"] for item in files]))
+        self._validate_engine_package(task, entry)
+
+    def uninstall(self, model_id: str) -> ModelTask:
+        entry = self._find_entry(model_id)
+        if entry is None or package_manifest(model_id) is None:
+            raise UserFacingError("Uninstall is supported for managed engine packages only", code="MODEL_PACKAGE_UNKNOWN")
+        # Task manager serializes operations for the same model. An active
+        # install/validation must finish or be cancelled before uninstalling.
+        if any(t.model_id == model_id and t.status in {"queued", "running"} for t in self.tasks.list()):
+            raise UserFacingError("Package operation is still active", hint="Cancel or wait for the current task, then uninstall.", code="MODEL_PACKAGE_BUSY")
+        return self.tasks.start(f"Uninstall: {entry['name']}", self._uninstall_engine_package, entry)
+
+    def _uninstall_engine_package(self, task: ModelTask, entry: dict[str, Any]) -> None:
+        _, dest = self._models_dest(entry)
+        expected = (self.models_dir / "internal" / entry["target"]["folder"] / entry["id"]).absolute()
+        if dest.absolute() != expected or not dest.resolve().is_relative_to(self.models_dir.resolve()):
+            raise UserFacingError("Unsafe package directory", code="MODEL_PACKAGE_PATH_INVALID")
+        safe_file(dest, "model.json")
+        # Refuse links anywhere in the owned tree, including Hub cache paths.
+        if dest.exists():
+            for item in dest.rglob("*"):
+                safe_file(dest, item.relative_to(dest).as_posix())
+            self._raise_if_task_cancelled(task, boundary="uninstall")
+            shutil.rmtree(dest)
+        cloud = self._cloud_models()
+        cloud.pop(entry["id"], None)
+        self._write_cloud_models(cloud)
+        self._append_task_log(task, "Removed local package and partial downloads. Remote cache objects and other models are preserved.")
 
     def install_pack(self, pack_id: str) -> list[ModelTask]:
         packs = built_in_packs()
@@ -1304,6 +1424,8 @@ class ModelManager:
         entry = self._find_entry(model_id)
         if not entry:
             raise UserFacingError(f"Unknown model id: {model_id}", hint="Refresh the model catalog and try again.")
+        if package_manifest(model_id):
+            return self.install(model_id)
         name = f"Restore local: {entry.get('name')}"
         return self.tasks.start(name, self._restore_cloud_model, entry)
 
@@ -1530,7 +1652,9 @@ class ModelManager:
                 fname = str(e.get("filename") or "")
 
                 if engine == "internal":
-                    out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
+                    out[mid] = self._local_installed_path(e) is not None or (
+                        package_manifest(mid) is None and self._cloud_model_record(mid) is not None
+                    )
                     continue
                 if engine == "runtime_bundle":
                     out[mid] = self._local_installed_path(e) is not None or self._cloud_model_record(mid) is not None
@@ -1768,6 +1892,9 @@ class ModelManager:
             pass
 
     def _internal_asset_installed(self, entry: dict[str, Any], path: Path) -> bool:
+        manifest = package_manifest(str(entry.get("id") or ""))
+        if manifest is not None:
+            return validate_package(path, manifest)["valid"] and not self._snapshot_has_incomplete_markers(path)
         if not _path_exists_safe(path):
             return False
 
@@ -3215,7 +3342,7 @@ class ModelManager:
             return False
         if self._local_installed_path(entry) is not None:
             return True
-        if not probe_remote:
+        if not probe_remote or package_manifest(model_id) is not None:
             return False
         if self._cloud_model_record(model_id) is not None:
             return True
@@ -3251,7 +3378,7 @@ class ModelManager:
             return None
 
         local = self._local_installed_path(entry)
-        if local is not None or not materialize_remote:
+        if local is not None or not materialize_remote or package_manifest(model_id) is not None:
             return local
 
         mode, dest = self._models_dest(entry)

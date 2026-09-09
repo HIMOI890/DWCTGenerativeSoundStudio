@@ -20,6 +20,14 @@ type CatalogEntry = {
   license_id?: string;
   license_url?: string;
   installable?: boolean;
+  package_managed?: boolean;
+  required_files?: string[];
+  download_size_bytes?: number;
+  package_status?: {
+    installed: boolean; runtime_ready: boolean; files_present: boolean;
+    hardware_compatible: boolean; hardware_known: boolean;
+    blockers: string[]; validation_issues: string[];
+  };
   hf_repo_id?: string;
   hf_url?: string;
   filename?: string;
@@ -186,6 +194,8 @@ function ModelCard({
   accepted,
   onAccept,
   onInstall,
+  onUninstall,
+  onValidate,
   onRestore,
   onOpen,
   onPromote,
@@ -199,6 +209,8 @@ function ModelCard({
   accepted: boolean;
   onAccept: () => void;
   onInstall: () => void;
+  onUninstall?: () => void;
+  onValidate?: () => void;
   onRestore: () => void;
   onOpen: (u: string) => void;
   onPromote?: (lane: string) => void;
@@ -210,7 +222,7 @@ function ModelCard({
   const cloudStored = !!cloudRecord;
   const cloudOnly = storageMode === "cloud_only";
   const cloudProvider = cloudRecord?.provider || cacheLabel || "cloud cache";
-  const statusLabel = installed ? "Installed locally" : cloudStored ? `Stored in ${cloudProvider}` : installable ? "Not installed" : "Browser only";
+  const statusLabel = m.package_status?.runtime_ready ? "Runtime ready" : installed ? "Installed locally" : cloudStored ? `Stored in ${cloudProvider}` : installable ? "Not installed" : "Browser only";
   const installLabel = installed
     ? "Installed"
     : cloudStored
@@ -249,6 +261,18 @@ function ModelCard({
               Best on: <b>{m.hardware_targets.join(", ")}</b>
             </div>
           ) : null}
+          {m.package_status ? (
+            <div className="small" style={{ marginTop: 8 }}>
+              <b>{m.package_status.runtime_ready ? "Runtime ready" : "Runtime blocked"}</b>
+              <div>Hardware: {m.package_status.hardware_known ? (m.package_status.hardware_compatible ? "Meets provisional targets" : "Below provisional targets") : "Unknown"}</div>
+              <div>Selective download: {((m.download_size_bytes || 0) / 1e9).toFixed(2)} GB · {m.required_files?.length || 0} required files</div>
+              <ul>{m.package_status.blockers.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+              <details><summary>Required files and validation</summary>
+                <ul>{m.required_files?.map((file) => <li key={file}>{file}</li>)}</ul>
+                {m.package_status.validation_issues.map((issue) => <div key={issue}>{issue}</div>)}
+              </details>
+            </div>
+          ) : null}
           {m.notes ? <div className="small" style={{ marginTop: 6 }}>{m.notes}</div> : null}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
@@ -278,6 +302,12 @@ function ModelCard({
             <button disabled={!canInstall || installed || cloudStored} onClick={onInstall}>
               {installLabel}
             </button>
+            {m.package_managed && m.package_status?.files_present ? (
+              <>
+                <button className="secondary" onClick={onValidate}>Revalidate files</button>
+                <button className="secondary" onClick={onUninstall}>Uninstall package</button>
+              </>
+            ) : null}
             {onBenchmark ? (
               <button className="secondary" onClick={onBenchmark}>Record benchmark</button>
             ) : null}
@@ -697,6 +727,17 @@ export default function Models(props: PageProps) {
     }
   }
 
+  async function packageAction(m: CatalogEntry, action: "uninstall" | "validate") {
+    if (action === "uninstall" && !window.confirm(`Remove ${m.name} and its local package files?`)) return;
+    setErr("");
+    try {
+      await apiPost(`/v1/models/${action}`, { model_id: m.id });
+      await refresh();
+    } catch (error: any) {
+      setErr(String(error?.message ?? error));
+    }
+  }
+
   async function promoteModel(modelId: string, lane: string) {
     setErr("");
     try {
@@ -962,8 +1003,8 @@ export default function Models(props: PageProps) {
     });
   }, [merged.built, installedMap, cloudMap, cacheLabel, tasks]);
 
-  const defaultModels = (merged.built ?? []).filter((m) => m.recommended === "default" && m.installable !== false);
-  const advancedModels = (merged.built ?? []).filter((m) => m.recommended !== "default" && m.installable !== false);
+  const defaultModels = (merged.built ?? []).filter((m) => (m.recommended === "default" || m.package_managed) && m.installable !== false);
+  const advancedModels = (merged.built ?? []).filter((m) => m.recommended !== "default" && !m.package_managed && m.installable !== false);
   const browserOnlyModels = (merged.built ?? []).filter((m) => m.installable === false);
 
   const panelDefinitions = useMemo(
@@ -1277,6 +1318,8 @@ export default function Models(props: PageProps) {
             accepted={!!acceptedMap[m.id]}
             onAccept={() => accept(m)}
             onInstall={() => install(m)}
+            onUninstall={() => packageAction(m, "uninstall")}
+            onValidate={() => packageAction(m, "validate")}
             onRestore={() => restoreLocal(m)}
             onOpen={(u) => window.edmg?.openExternal?.(u)}
             onPromote={(lane) => promoteModel(m.id, lane)}
@@ -1298,6 +1341,8 @@ export default function Models(props: PageProps) {
             accepted={!!acceptedMap[m.id]}
             onAccept={() => accept(m)}
             onInstall={() => install(m)}
+            onUninstall={() => packageAction(m, "uninstall")}
+            onValidate={() => packageAction(m, "validate")}
             onRestore={() => restoreLocal(m)}
             onOpen={(u) => window.edmg?.openExternal?.(u)}
             onPromote={(lane) => promoteModel(m.id, lane)}
@@ -1321,6 +1366,8 @@ export default function Models(props: PageProps) {
                 accepted={!!acceptedMap[m.id]}
                 onAccept={() => accept(m)}
                 onInstall={() => install(m)}
+            onUninstall={() => packageAction(m, "uninstall")}
+            onValidate={() => packageAction(m, "validate")}
                 onRestore={() => restoreLocal(m)}
                 onOpen={(u) => window.edmg?.openExternal?.(u)}
                 onPromote={(lane) => promoteModel(m.id, lane)}
@@ -1342,6 +1389,8 @@ export default function Models(props: PageProps) {
                 accepted={!!acceptedMap[m.id]}
                 onAccept={() => accept(m)}
                 onInstall={() => install(m)}
+            onUninstall={() => packageAction(m, "uninstall")}
+            onValidate={() => packageAction(m, "validate")}
                 onRestore={() => restoreLocal(m)}
                 onOpen={(u) => window.edmg?.openExternal?.(u)}
                 onPromote={(lane) => promoteModel(m.id, lane)}

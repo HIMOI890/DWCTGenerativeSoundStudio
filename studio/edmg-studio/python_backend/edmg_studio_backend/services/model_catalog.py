@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .engine_packages import HIGH_GGUF_ID, MANIFESTS, PROFILES, STANDARD_GGUF_ID
+
 
 def _entry(
     *,
@@ -65,7 +67,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
     # - target: installation instructions (where it goes)
     # - render: optional UI/runtime metadata for Render page presets
     # - collections / tags / hardware_targets: discovery metadata for the richer Hub browser
-    return [
+    entries = [
         _entry(
             model_id="ollama_qwen3_4b",
             name="Qwen3 4B (Ollama)",
@@ -160,7 +162,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
             license_id="tencent-hunyuan-community",
             license_url="https://huggingface.co/tencent/HunyuanVideo-1.5",
             recommended="advanced",
-            notes="Internal temporal renderer discovery entry. The 480p/720p T2V and I2V payloads are large; Studio keeps installation disabled until the Hunyuan adapter, low-VRAM profile, and fresh temporal output evidence pass qualification.",
+            notes="The selective distilled package manifest below defines installation independently of runtime qualification.",
             family="hunyuan_video15",
             tags=["internal", "video", "temporal", "t2v", "i2v", "unverified"],
             hardware_targets=["nvidia"],
@@ -177,13 +179,13 @@ def built_in_catalog() -> list[dict[str, Any]]:
             name="LTX-2.5 Distilled (Internal Renderer)",
             kind="video_diffusers",
             source="hf",
-            hf_repo_id="Lightricks/LTX-2.5-Diffusers",
+            hf_repo_id="Lightricks/LTX-2.5",
             target={"engine": "internal", "folder": "video"},
             installable=False,
             license_id="ltx-2.x-community-license-agreement",
-            license_url="https://huggingface.co/Lightricks/LTX-2.5-Diffusers",
+            license_url="https://huggingface.co/Lightricks/LTX-2.5",
             recommended="advanced",
-            notes="High-tier internal renderer discovery entry. The split 22B pack and runtime contract are not yet pinned or qualified for Studio installation.",
+            notes="The selective five-file split package manifest below defines installation independently of runtime qualification.",
             family="ltx_25",
             tags=["internal", "video", "temporal", "distilled", "high-tier", "unverified"],
             hardware_targets=["nvidia"],
@@ -394,7 +396,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
         ),
         _entry(
             model_id="hf_bucket_sdxl_controlnet_canny_internal",
-            name="ControlNet Canny SDXL — HF Bucket (Internal / Diffusers)",
+            name="ControlNet Canny SDXL â€” HF Bucket (Internal / Diffusers)",
             kind="controlnet",
             source="hf_bucket",
             hf_bucket_id="gulle1155/controlnet-canny-sdxl-1.0-bucket",
@@ -820,7 +822,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
             hardware_targets=["amd", "windows"],
         ),
 
-        # ── Adobe Firefly ────────────────────────────────────────────────────
+        # â”€â”€ Adobe Firefly â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         _entry(
             model_id="firefly_standard",
             name="Adobe Firefly Image 3 (Hosted)",
@@ -833,7 +835,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
             notes=(
                 "Generates keyframes via the Adobe Firefly v3 API. "
                 "No local GPU needed. Requires an Adobe Developer account with the Firefly API scope. "
-                "Configure Client ID and Client Secret in Settings → Adobe Firefly."
+                "Configure Client ID and Client Secret in Settings â†’ Adobe Firefly."
             ),
             author="adobe",
             tags=["hosted", "firefly", "adobe", "no-gpu"],
@@ -856,7 +858,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
             notes=(
                 "Uses your own custom-trained Adobe Firefly model accessed via the Adobe Firefly API. "
                 "Train your model at firefly.adobe.com (enterprise), then paste the resulting "
-                "custom model ID (urn:firefly:...) into Settings → Adobe Firefly → Custom Model ID. "
+                "custom model ID (urn:firefly:...) into Settings â†’ Adobe Firefly â†’ Custom Model ID. "
                 "Works with any content you fine-tuned Firefly on: brand assets, characters, styles, etc."
             ),
             author="custom",
@@ -870,7 +872,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
             },
         ),
 
-        # ── Local custom safetensors (user-supplied) ─────────────────────────
+        # â”€â”€ Local custom safetensors (user-supplied) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         _entry(
             model_id="local_custom_sdxl",
             name="Local Custom SDXL Checkpoint (.safetensors)",
@@ -882,8 +884,8 @@ def built_in_catalog() -> list[dict[str, Any]]:
             installable=False,
             notes=(
                 "Point Studio at any SDXL-compatible .safetensors checkpoint you have built or downloaded. "
-                "Place the file under your Studio models directory → checkpoints/, "
-                "then set the model path in Render → Model or via EDMG_COMFYUI_CHECKPOINT. "
+                "Place the file under your Studio models directory â†’ checkpoints/, "
+                "then set the model path in Render â†’ Model or via EDMG_COMFYUI_CHECKPOINT. "
                 "Works with models fine-tuned in Kohya_ss, EveryDream, DreamBooth, or exported from Adobe's tools."
             ),
             author="user",
@@ -908,7 +910,7 @@ def built_in_catalog() -> list[dict[str, Any]]:
             notes=(
                 "Any SD 1.5-compatible .safetensors checkpoint you supply. "
                 "Compatible with Stable Diffusion 1.x fine-tunes, LoRA merges, and custom DreamBooth outputs. "
-                "Place under models/checkpoints/ and select via Render → Model."
+                "Place under models/checkpoints/ and select via Render â†’ Model."
             ),
             author="user",
             tags=["local", "custom", "safetensors", "sd15", "user-trained"],
@@ -921,6 +923,38 @@ def built_in_catalog() -> list[dict[str, Any]]:
             },
         ),
     ]
+    additions = [
+        (STANDARD_GGUF_ID, "Qwen3-VL-8B Q4_K_M + Q8 projector (Internal Director)", "qwen3_vl", "apache-2.0"),
+        (HIGH_GGUF_ID, "Qwen3-VL-30B-A3B Q4_K_M + Q8 projector (Internal Director)", "qwen3_vl", "apache-2.0"),
+        ("hf_whisper_large_v3_turbo_internal", "Whisper large-v3-turbo (Internal ASR package)", "whisper", "apache-2.0"),
+    ]
+    for model_id, name, family, license_id in additions:
+        entries.append(_entry(model_id=model_id, name=name, kind="internal_package", source="hf",
+                              license_id=license_id, license_url=f"https://huggingface.co/{MANIFESTS[model_id]['repo_id']}",
+                              recommended="advanced", notes="", family=family))
+    for entry in entries:
+        manifest = MANIFESTS.get(entry["id"])
+        if manifest is None:
+            continue
+        engine, role, vram, ram, _ = PROFILES[entry["id"]]
+        entry.update(
+            kind="internal_package", installable=True, discovery_only=False,
+            hf_repo_id=manifest["repo_id"], hf_revision=manifest["revision"],
+            license_url=f"https://huggingface.co/{manifest['repo_id']}",
+            target={"engine": "internal", "folder": role},
+            required_files=[item["path"] for item in manifest["files"]],
+            package_files=manifest["files"], package_managed=True,
+            download_size_bytes=sum(item["size_bytes"] for item in manifest["files"]),
+            hardware_targets=["nvidia_cuda"] if vram else ["cpu", "gpu_offload"],
+            hardware_requirements={"min_vram_gb": vram, "min_ram_gb": ram, "provisional": True},
+            tags=["internal", "engine-package", role, "runtime-unqualified"],
+            notes="Pinned selective package; installation validates every required file with SHA-256. Runtime readiness is separate: see the package blockers. Local storage only; no whole-repository download.",
+        )
+        if role == "video":
+            entry["render"] = {"engine": "internal_video_model", "workflow_family": engine,
+                               "video_model_engine": engine, "render_modes": ["internal_video_model"]}
+    return entries
+
 
 
 def built_in_packs() -> list[dict[str, Any]]:

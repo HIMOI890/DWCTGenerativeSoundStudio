@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..services.engine_packages import HIGH_GGUF_ID, STANDARD_GGUF_ID, runtime_status
+
 DirectorMode = Literal["automatic", "fast", "quality", "maximum"]
 RendererEngine = Literal["hunyuan_video15", "ltx_25", "external"]
 
@@ -179,9 +181,13 @@ def _director_for_mode(
     if mode in {"quality", "maximum"} and tier in {"high", "ultra"}:
         if _model_installed(installed_models, HIGH_TIER_DIRECTOR_MODEL_ID):
             return HIGH_TIER_DIRECTOR_MODEL_ID, warnings
+        if _model_installed(installed_models, HIGH_GGUF_ID) and not _model_installed(installed_models, STANDARD_DIRECTOR_MODEL_ID):
+            return HIGH_GGUF_ID, warnings
         warnings.append(
             "Qwen3-VL-30B-A3B is not installed; falling back to the standard Qwen3-VL-8B Director."
         )
+    if not _model_installed(installed_models, STANDARD_DIRECTOR_MODEL_ID) and _model_installed(installed_models, STANDARD_GGUF_ID):
+        return STANDARD_GGUF_ID, warnings
     return STANDARD_DIRECTOR_MODEL_ID, warnings
 
 
@@ -255,6 +261,8 @@ def resolve_director_readiness(
     director_runtime_ready = director_model == STANDARD_DIRECTOR_MODEL_ID
     if not director_installed:
         director_reason = f"Install {director_model} in Models before loading the Director."
+    elif director_model in {STANDARD_GGUF_ID, HIGH_GGUF_ID}:
+        director_reason = " ".join(runtime_status(director_model, hw)["blockers"])
     elif director_runtime_ready:
         director_reason = "Installed and the Director adapter is available."
     else:
@@ -312,6 +320,8 @@ def resolve_director_readiness(
         )
         if not renderer_installed:
             blockers.append(f"{renderer_label} is not installed in the local model catalog.")
+        if renderer_engine in {"ltx_25", "hunyuan_video15"}:
+            blockers.extend(runtime_status(renderer_model, hw)["blockers"])
         blockers.append(
             f"{renderer_label} local execution is not release-qualified yet; readiness remains blocked until its adapter passes validation."
         )
@@ -320,10 +330,10 @@ def resolve_director_readiness(
 
     director_selection = _selection(
         role="director",
-        engine="qwen3_vl",
+        engine="qwen3_vl_gguf" if director_model in {STANDARD_GGUF_ID, HIGH_GGUF_ID} else "qwen3_vl",
         model_id=director_model,
         label="Qwen3-VL-30B-A3B"
-        if director_model == HIGH_TIER_DIRECTOR_MODEL_ID
+        if director_model in {HIGH_TIER_DIRECTOR_MODEL_ID, HIGH_GGUF_ID}
         else "Qwen3-VL-8B",
         profile=director_profile,
         installed=director_installed,

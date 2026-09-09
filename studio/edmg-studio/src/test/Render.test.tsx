@@ -519,7 +519,7 @@ describe("Render page", () => {
 
     renderWithStudio(<Render />);
 
-    const temporalOption = await screen.findByRole("option", { name: "Internal video model (SVD / AnimateDiff)" });
+    const temporalOption = await screen.findByRole("option", { name: "Internal video model" });
     const temporalSelect = temporalOption.closest("select") as HTMLSelectElement;
     fireEvent.change(temporalSelect, { target: { value: "video_model" } });
 
@@ -620,7 +620,7 @@ describe("Render page", () => {
 
     renderWithStudio(<Render />);
 
-    const temporalOption = await screen.findByRole("option", { name: "Internal video model (SVD / AnimateDiff)" });
+    const temporalOption = await screen.findByRole("option", { name: "Internal video model" });
     const temporalSelect = temporalOption.closest("select");
     expect(temporalSelect).toBeTruthy();
     fireEvent.change(temporalSelect!, { target: { value: "video_model" } });
@@ -654,7 +654,7 @@ describe("Render page", () => {
 
     renderWithStudio(<Render />);
 
-    const temporalOption = await screen.findByRole("option", { name: "Internal video model (SVD / AnimateDiff)" });
+    const temporalOption = await screen.findByRole("option", { name: "Internal video model" });
     const temporalSelect = temporalOption.closest("select");
     expect(temporalSelect).toBeTruthy();
     fireEvent.change(temporalSelect!, { target: { value: "video_model" } });
@@ -703,7 +703,7 @@ describe("Render page", () => {
     fireEvent.change(strategySelect!, { target: { value: "storyboard_full_motion" } });
 
     expect(await screen.findByText(/generate scene keyframe anchors/i)).toBeTruthy();
-    expect(await screen.findByDisplayValue("Internal video model (SVD / AnimateDiff)")).toBeTruthy();
+    expect(await screen.findByDisplayValue("Internal video model")).toBeTruthy();
     expect((await screen.findByLabelText("Keyframe continuity") as HTMLSelectElement).value).toBe("project");
 
     await waitFor(() => {
@@ -749,7 +749,7 @@ describe("Render page", () => {
 
     renderWithStudio(<Render />);
 
-    const temporalOption = await screen.findByRole("option", { name: "Internal video model (SVD / AnimateDiff)" });
+    const temporalOption = await screen.findByRole("option", { name: "Internal video model" });
     const temporalSelect = temporalOption.closest("select");
     expect(temporalSelect).toBeTruthy();
     fireEvent.change(temporalSelect!, { target: { value: "video_model" } });

@@ -564,14 +564,14 @@ def create_project_router(
     return router
 
 
-def create_models_router(*, get_models: Callable[[], Any]) -> APIRouter:
+def create_models_router(*, get_models: Callable[[], Any], get_hardware: Callable[[], dict] | None = None) -> APIRouter:
     """Model catalog and install routes extracted from app.py for WP-09."""
 
     router = APIRouter(tags=["models"])
 
     @router.get("/v1/models/catalog")
     def models_catalog() -> dict[str, Any]:
-        return get_models().catalog()
+        return get_models().catalog(hardware=get_hardware()) if get_hardware else get_models().catalog()
 
     @router.post("/v1/models/promote")
     def models_promote(req: dict[str, Any]) -> dict[str, Any]:
@@ -626,6 +626,14 @@ def create_models_router(*, get_models: Callable[[], Any]) -> APIRouter:
         model_id = str(req.get("model_id") or "")
         task = get_models().install(model_id)
         return {"task": task.__dict__}
+
+    @router.post("/v1/models/uninstall")
+    def models_uninstall(req: dict[str, Any]) -> dict[str, Any]:
+        return {"task": get_models().uninstall(str(req.get("model_id") or "")).to_dict()}
+
+    @router.post("/v1/models/validate")
+    def models_validate(req: dict[str, Any]) -> dict[str, Any]:
+        return {"task": get_models().validate_engine_package(str(req.get("model_id") or "")).to_dict()}
 
     @router.post("/v1/models/restore_local")
     def models_restore_local(req: dict[str, Any]) -> dict[str, Any]:

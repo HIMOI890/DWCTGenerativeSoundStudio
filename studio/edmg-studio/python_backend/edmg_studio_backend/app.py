@@ -6687,7 +6687,7 @@ app.include_router(
         enqueue_timeline_render=_enqueue_timeline_render,
     )
 )
-app.include_router(create_models_router(get_models=lambda: models))
+app.include_router(create_models_router(get_models=lambda: models, get_hardware=_hardware_profile))
 
 
 def _render_quality_tier_from_preset(preset: str | None) -> str:
@@ -10938,11 +10938,13 @@ INTERNAL_VIDEO_MODEL_IDS = (
     INTERNAL_SVD_VIDEO_MODEL_ID,
     INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID,
     HUNYUAN_MODEL_ID,
+    LTX_MODEL_ID,
 )
 INTERNAL_VIDEO_MODEL_ENGINES = {
     INTERNAL_SVD_VIDEO_MODEL_ID: "svd",
     INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID: "animatediff",
     HUNYUAN_MODEL_ID: "hunyuan_video15",
+    LTX_MODEL_ID: "ltx_25",
 }
 
 
@@ -10969,7 +10971,7 @@ def _resolve_internal_video_model_selection(
     installed_ad = models.installed_path(INTERNAL_ANIMATEDIFF_VIDEO_MODEL_ID)
     installed_hunyuan = models.installed_path(HUNYUAN_MODEL_ID)
 
-    if requested_engine not in {"auto", "svd", "animatediff", "hunyuan_video15"}:
+    if requested_engine not in {"auto", "svd", "animatediff", "hunyuan_video15", "ltx_25"}:
         raise UserFacingError(
             "Selected internal video adapter engine is not supported",
             hint="Choose Auto installed, SVD image-to-video, AnimateDiff SD1.5, or HunyuanVideo-1.5.",
@@ -10991,6 +10993,7 @@ def _resolve_internal_video_model_selection(
                 "svd": "Stable Video Diffusion XT 1.1",
                 "animatediff": "AnimateDiff Motion Adapter",
                 "hunyuan_video15": "HunyuanVideo-1.5",
+                "ltx_25": "LTX-2.5 Distilled",
             }[requested_engine]
             raise UserFacingError(
                 "Selected internal video model does not match the adapter engine",
@@ -11022,6 +11025,10 @@ def _resolve_internal_video_model_selection(
         path = installed_hunyuan
         engine = "hunyuan_video15"
         requested_model_id = HUNYUAN_MODEL_ID
+    elif requested_engine == "ltx_25":
+        path = models.installed_path(LTX_MODEL_ID)
+        engine = "ltx_25"
+        requested_model_id = LTX_MODEL_ID
     elif installed_svd:
         path = installed_svd
         engine = "svd"
@@ -11044,6 +11051,11 @@ def _resolve_internal_video_model_selection(
         )
 
     resolved_path = Path(path)
+    if engine in {"hunyuan_video15", "ltx_25"}:
+        from .services.engine_packages import runtime_status
+        status = runtime_status(requested_model_id, _hardware_profile())
+        raise UserFacingError("Selected engine package is not ready for local rendering",
+            hint=" ".join(status["blockers"]), code="DIRECTOR_RENDERER_NOT_READY", status_code=422)
     internal_video_models.validate_video_model_layout(engine, resolved_path)
 
     if engine == "hunyuan_video15":

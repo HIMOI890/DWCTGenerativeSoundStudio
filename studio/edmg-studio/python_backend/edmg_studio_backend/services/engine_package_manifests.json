@@ -1,0 +1,172 @@
+{
+  "hf_qwen3_vl_8b_gguf_director": {
+    "repo_id": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+    "revision": "f982a07559d4a2f6c8744d840bf6fccab30eea96",
+    "files": [
+      {
+        "path": "Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+        "size_bytes": 5027784800,
+        "sha256": "67d1659bfe71b89d50b45a4ad1a9e5b997e5bb16ce5da66a6a6167abd569e9e2"
+      },
+      {
+        "path": "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+        "size_bytes": 752289728,
+        "sha256": "c6ba85508d82f42590e6eb77d5340369ab6fecf107a7561d809523d8aa5f3bfd"
+      }
+    ]
+  },
+  "hf_qwen3_vl_30b_gguf_director": {
+    "repo_id": "Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF",
+    "revision": "f54435e6cc31258f04b0969105c3f6badb197931",
+    "files": [
+      {
+        "path": "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf",
+        "size_bytes": 18556687168,
+        "sha256": "87bb374d849f80ebdfabb304189fac9e0bd35a0f74506e6a59c51b206cbe863b"
+      },
+      {
+        "path": "mmproj-Qwen3VL-30B-A3B-Instruct-Q8_0.gguf",
+        "size_bytes": 712148928,
+        "sha256": "82a9966edfdbc1b18a27fd90af96d50cbf111a51484f6290e946dccf461c8150"
+      }
+    ]
+  },
+  "hf_hunyuan_video15_internal": {
+    "repo_id": "tencent/HunyuanVideo-1.5",
+    "revision": "9b49404b3f5df2a8f0b31df27a0c7ab872e7b038",
+    "files": [
+      {
+        "path": "config.json",
+        "size_bytes": 990,
+        "sha256": "c98a85b785d147755e8007d0459ee5dbf47fc4781466ada7c51bb6f6a915eb1d"
+      },
+      {
+        "path": "scheduler/scheduler_config.json",
+        "size_bytes": 354,
+        "sha256": "04429e9a2b851e806dc3a2fddd4c09250b78721ed81afb9b375a91e43afd4df4"
+      },
+      {
+        "path": "vae/config.json",
+        "size_bytes": 462,
+        "sha256": "899e63dae033b2fa14291cefbe6e1736741d816991456e96d4d497918dacf8af"
+      },
+      {
+        "path": "vae/diffusion_pytorch_model.safetensors",
+        "size_bytes": 5042560980,
+        "sha256": "2609ed7033c052fdf164afcac71e8a7c82afccdbb001d673444a72f194fbb918"
+      },
+      {
+        "path": "transformer/480p_t2v_distilled/config.json",
+        "size_bytes": 968,
+        "sha256": "689b2168380a16e50560dece59edfb7cc8b4de4d0438ffc450b9f494a949a6ae"
+      },
+      {
+        "path": "transformer/480p_t2v_distilled/diffusion_pytorch_model.safetensors",
+        "size_bytes": 33306632192,
+        "sha256": "0f35dc10a4037a618b22fef4ee20f8a9d972b4cf2e684764ed8f442fc7a2583f"
+      },
+      {
+        "path": "transformer/480p_i2v_step_distilled/config.json",
+        "size_bytes": 967,
+        "sha256": "424a38626eb39a0d803506f3c21dd5809868e4a893e3d03bac1723250bcbf40f"
+      },
+      {
+        "path": "transformer/480p_i2v_step_distilled/diffusion_pytorch_model.safetensors",
+        "size_bytes": 33325523336,
+        "sha256": "29418e43ef5bfa1868703c26f9b45c622b473960c479dc5be43bba7bd0004f6d"
+      }
+    ]
+  },
+  "hf_whisper_large_v3_turbo_internal": {
+    "repo_id": "openai/whisper-large-v3-turbo",
+    "revision": "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+    "files": [
+      {
+        "path": "model.safetensors",
+        "size_bytes": 1617824864,
+        "sha256": "542566a422ae4f3fd23f1ba11add198fca01bbf82e66e6a2857b3f608b1eb9d1"
+      },
+      {
+        "path": "config.json",
+        "size_bytes": 1256,
+        "sha256": "c5b526b3e3cd64cd8940dabb45e8ba726629e22d8ed389c29b552f9140daf04a"
+      },
+      {
+        "path": "generation_config.json",
+        "size_bytes": 3772,
+        "sha256": "cce11bfe3aaa6ae9e072ea2637caaec8795e68d9b67e655a5af16ee509681a4c"
+      },
+      {
+        "path": "preprocessor_config.json",
+        "size_bytes": 340,
+        "sha256": "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711"
+      },
+      {
+        "path": "tokenizer.json",
+        "size_bytes": 2710337,
+        "sha256": "297b13372ac43916285644fb9687add3cc62ee2a1adb60da3dc25cc94c1871fd"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size_bytes": 282843,
+        "sha256": "844b642c73a91359722f47b35705f7174686df33d252695d8572cf9ac03a6389"
+      },
+      {
+        "path": "special_tokens_map.json",
+        "size_bytes": 2186,
+        "sha256": "baea4ea09372eb4fca86b4e4346139fd73cb807d5087e9de0948e971739c3e74"
+      },
+      {
+        "path": "added_tokens.json",
+        "size_bytes": 34648,
+        "sha256": "3c51f66c4c21f9e126970078f11ae77a78c74aee8df606ee9daba86e467108e0"
+      },
+      {
+        "path": "normalizer.json",
+        "size_bytes": 52666,
+        "sha256": "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd"
+      },
+      {
+        "path": "vocab.json",
+        "size_bytes": 1036558,
+        "sha256": "e2aa043ef015641d363d8288e7c241c85e36a5c761fb303598e0710233344387"
+      },
+      {
+        "path": "merges.txt",
+        "size_bytes": 493869,
+        "sha256": "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6"
+      }
+    ]
+  },
+  "hf_ltx_25_distilled_internal": {
+    "repo_id": "Lightricks/LTX-2.5",
+    "revision": "5e6e71018ee1756ed329b697a7b4aedc934dfce9",
+    "files": [
+      {
+        "path": "diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors",
+        "size_bytes": 42018190584,
+        "sha256": "31eb3cad89b9e54e99dd3baf286f70825ac4f6c660a70d9184d895be76d7bff4"
+      },
+      {
+        "path": "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors",
+        "size_bytes": 26263858182,
+        "sha256": "ef7243612fdae7a75cb4d5cee9433e81380675fb6c213bd98ae74a9cd16561d1"
+      },
+      {
+        "path": "vae/ltx-2.5-video-vae-bf16.safetensors",
+        "size_bytes": 1472223346,
+        "sha256": "847e14ca7f3355debca0cea4eaa24ac0fbcdf0061da054ac89ca638a869ddba3"
+      },
+      {
+        "path": "vae/ltx-2.5-audio-vae-bf16.safetensors",
+        "size_bytes": 364866540,
+        "sha256": "c52733d37f6a7fb7949c3dc0fb468c6cb2169e4d836983a73babb9f0d54837a5"
+      },
+      {
+        "path": "model_patches/ltx-2.5-duration-head-bf16.safetensors",
+        "size_bytes": 3843690,
+        "sha256": "2ec71e4206ed365d015f00c05a48caccfb0ee862986809d06ae376c09f5d9190"
+      }
+    ]
+  }
+}

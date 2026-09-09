@@ -92,6 +92,38 @@ const readyLegacyTensorRt = {
 };
 
 describe("Models page polling", () => {
+  it("shows managed packages in basic mode with separate runtime status and uninstall", async () => {
+    vi.useRealTimers();
+    const modelId = "hf_ltx_25_distilled_internal";
+    const fetchMock = installFetchMock({
+      "/v1/models/catalog": {
+        ...catalog,
+        catalog: [{ id: modelId, name: "LTX-2.5 Distilled", kind: "internal_package", source: "hf",
+          recommended: "advanced", installable: true, package_managed: true,
+          required_files: ["vae/video.safetensors"], download_size_bytes: 70122982342,
+          package_status: { installed: true, runtime_ready: false, files_present: true,
+            hardware_known: true, hardware_compatible: false,
+            blockers: ["LTX execution adapter is pending."], validation_issues: [] } }],
+        installed: { [modelId]: true }, accepted: { [modelId]: true },
+      },
+      "/v1/models/tasks": { tasks: [] },
+      "/v1/settings/render_providers": {},
+      "/v1/models/uninstall": { task: { id: "remove", status: "queued" } },
+      "/v1/models/validate": { task: { id: "check", status: "queued" } },
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderWithStudio(<Models backendUrl="http://127.0.0.1:7863" config={{}} />);
+    expect(await screen.findByText("LTX-2.5 Distilled")).toBeTruthy();
+    expect(screen.getByText("Installed locally")).toBeTruthy();
+    expect(screen.getByText("Runtime blocked")).toBeTruthy();
+    expect(screen.getByText(/Below provisional targets/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Revalidate files" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/models/validate"))).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Uninstall package" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/models/uninstall") && JSON.parse(String(init?.body)).model_id === modelId)).toBe(true));
+    confirm.mockRestore();
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     window.localStorage.clear();

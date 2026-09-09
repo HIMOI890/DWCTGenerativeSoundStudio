@@ -15,6 +15,7 @@ from ..domain.director_readiness import (
 from ..domain.director_scene import DirectorDocument, compile_scene
 from ..domain.director_workflow import prepare_workflow
 from ..revisions import RevisionRoute
+from ..services.engine_packages import HIGH_GGUF_ID, STANDARD_GGUF_ID
 from ..services.qwen_director import validate_proposal
 
 
@@ -50,6 +51,8 @@ def create_director_router(get_store, get_jobs=None, get_models=None, get_hardwa
             HIGH_TIER_DIRECTOR_MODEL_ID,
             HUNYUAN_MODEL_ID,
             LTX_MODEL_ID,
+            STANDARD_GGUF_ID,
+            HIGH_GGUF_ID,
         )
         service = get_models() if get_models is not None else None
         if service is None:
