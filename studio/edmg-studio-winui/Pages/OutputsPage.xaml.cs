@@ -22,8 +22,9 @@ public sealed partial class OutputsPage : Page
     private readonly StudioProjectMediaClient _projectMediaClient = App.Services.ProjectMediaClient;
     private readonly StudioSessionService _session = App.Services.Session;
     private readonly BackendConfiguration _backendConfiguration = App.Services.Configuration;
-    private CancellationTokenSource? _previewCts;
+    private readonly LatestRequestGate _previewRequests = new();
     private string? _previewTempPath;
+    private readonly LatestRequestGate _refreshRequests = new();
 
     public OutputsPage()
     {
@@ -46,12 +47,15 @@ public sealed partial class OutputsPage : Page
 
     protected override async void OnNavigatedFrom(NavigationEventArgs e)
     {
+        _refreshRequests.Cancel();
         await CancelPreviewAsync(clearSurface: true);
         base.OnNavigatedFrom(e);
     }
 
     private async Task RefreshAsync(string? preferredStableIdentity = null)
     {
+        using var request = _refreshRequests.Begin();
+        string projectId = ActiveProjectId;
         string? selectionIdentity = preferredStableIdentity ?? SelectedOutput?.StableIdentity;
         if (string.IsNullOrWhiteSpace(ActiveProjectId))
         {
@@ -65,7 +69,8 @@ public sealed partial class OutputsPage : Page
         SetBusy(true);
         try
         {
-            JsonElement outputs = await _apiClient.GetOutputsAsync(ActiveProjectId);
+            JsonElement outputs = await _apiClient.GetOutputsAsync(projectId, request.Token);
+            if (!request.IsCurrent || projectId != ActiveProjectId) return;
             Items.Clear();
             foreach (StudioOutputItem item in StudioOutputCatalog.Project(outputs))
             {
@@ -78,20 +83,26 @@ public sealed partial class OutputsPage : Page
                 $"{Items.Count} output record(s) loaded for project {ActiveProjectId}.",
                 InfoBarSeverity.Success);
         }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+        {
+        }
         catch (Exception ex)
         {
-            SetStatus("Unable to load outputs", ex.Message, InfoBarSeverity.Error);
+            if (request.IsCurrent && projectId == ActiveProjectId)
+                SetStatus("Unable to load outputs", ex.Message, InfoBarSeverity.Error);
         }
         finally
         {
-            SetBusy(false);
+            if (request.IsCurrent) SetBusy(false);
         }
     }
 
     private async void OutputsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        await CancelPreviewAsync(clearSurface: false);
+        using var request = _previewRequests.Begin();
+        string projectId = ActiveProjectId;
         StudioOutputItem? selected = SelectedOutput;
+        OutputPreview.ShowEmpty("Loading selected output…");
         UpdateSelectionUi(selected);
 
         if (selected is null)
@@ -107,14 +118,15 @@ public sealed partial class OutputsPage : Page
         }
 
         _session.SetSelectedArtifact(selected.Path);
-        _previewCts = new CancellationTokenSource();
         try
         {
             await _projectMediaClient.StreamProjectMediaAsync<bool>(
-                ActiveProjectId,
+                projectId,
                 selected.Path,
                 async (file, cancellationToken) =>
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!request.IsCurrent || projectId != ActiveProjectId) return false;
                     if (selected.IsVideo)
                     {
                         await OutputPreview.LoadVideoStreamAsync(file.Stream, file.ContentHeaders.ContentLength, cancellationToken);
@@ -128,15 +140,18 @@ public sealed partial class OutputsPage : Page
                     }
                     return true;
                 },
-                _previewCts.Token);
+                request.Token);
         }
         catch (OperationCanceledException)
         {
         }
         catch (Exception ex)
         {
-            OutputPreview.ShowError(ex.Message);
-            SetStatus("Preview failed", ex.Message, InfoBarSeverity.Warning);
+            if (request.IsCurrent && projectId == ActiveProjectId)
+            {
+                OutputPreview.ShowError(ex.Message);
+                SetStatus("Preview failed", ex.Message, InfoBarSeverity.Warning);
+            }
         }
     }
 
@@ -169,14 +184,9 @@ public sealed partial class OutputsPage : Page
         }
     }
 
-    private async Task CancelPreviewAsync(bool clearSurface)
+    private Task CancelPreviewAsync(bool clearSurface)
     {
-        CancellationTokenSource? cts = Interlocked.Exchange(ref _previewCts, null);
-        if (cts is not null)
-        {
-            await cts.CancelAsync();
-            cts.Dispose();
-        }
+        _previewRequests.Cancel();
 
         if (clearSurface)
         {
@@ -184,6 +194,7 @@ public sealed partial class OutputsPage : Page
         }
 
         DeletePreviewTemp();
+        return Task.CompletedTask;
     }
 
     private void DeletePreviewTemp()

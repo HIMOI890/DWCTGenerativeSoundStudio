@@ -108,6 +108,122 @@ def test_video_model_layout_accepts_canonical_assets(tmp_path: Path) -> None:
     ivm.validate_video_model_layout("animatediff", animatediff_dir)
 
 
+def test_hunyuan_layout_accepts_diffusers_and_upstream_config_names(tmp_path: Path) -> None:
+    diffusers_dir = tmp_path / "hunyuan-diffusers"
+    diffusers_dir.mkdir()
+    (diffusers_dir / "model_index.json").write_text(
+        '{"_class_name": "HunyuanVideo15Pipeline"}',
+        encoding="utf-8",
+    )
+    upstream_dir = tmp_path / "hunyuan-upstream"
+    upstream_dir.mkdir()
+    (upstream_dir / "config.json").write_text(
+        '{"_class_name": "HunyuanVideo_1_5_Pipeline"}',
+        encoding="utf-8",
+    )
+
+    ivm.validate_video_model_layout("hunyuan_video15", diffusers_dir)
+    ivm.validate_video_model_layout("hunyuan_video15", upstream_dir)
+
+
+def test_hunyuan_t2v_and_i2v_use_distinct_pipeline_contracts(tmp_path: Path, monkeypatch) -> None:
+    model_dir = tmp_path / "hunyuan"
+    model_dir.mkdir()
+    (model_dir / "model_index.json").write_text(
+        '{"_class_name": "HunyuanVideo15Pipeline"}',
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, dict[str, object]]] = []
+    guider_calls: list[float] = []
+    tiling_calls: list[str] = []
+
+    class FakeGuider:
+        def new(self, **kwargs):
+            guider_calls.append(float(kwargs["guidance_scale"]))
+            return self
+
+    class FakeVae:
+        def enable_tiling(self):
+            tiling_calls.append("vae")
+
+    class FakePipe:
+        def __init__(self) -> None:
+            self.guider = FakeGuider()
+            self.vae = FakeVae()
+
+        @classmethod
+        def from_pretrained(cls, _path, **kwargs):
+            calls.append((cls.__name__, dict(kwargs)))
+            return cls()
+
+        def to(self, _device):
+            return self
+
+        def __call__(self, **kwargs):
+            frame = Image.new("RGB", (32, 20), color=(len(calls), 0, 0))
+            return SimpleNamespace(frames=[[frame.copy(), frame.copy()]])
+
+    class FakeT2VPipeline(FakePipe):
+        pass
+
+    class FakeI2VPipeline(FakePipe):
+        pass
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "diffusers",
+        type(
+            "FakeDiffusers",
+            (),
+            {
+                "HunyuanVideo15Pipeline": FakeT2VPipeline,
+                "HunyuanVideo15ImageToVideoPipeline": FakeI2VPipeline,
+            },
+        ),
+    )
+    monkeypatch.setattr(ivm, "_parse_torch_dtype", lambda _dtype, _device: "float32")
+    monkeypatch.setattr(ivm, "_seeded_generator", lambda seed, _device: (object(), int(seed or 0)))
+    ivm.clear_video_pipeline_cache()
+
+    t2v = ivm.generate_video_model_frames(
+        engine="hunyuan_video15",
+        video_model_dir=model_dir,
+        base_model_dir=tmp_path / "base",
+        init_image=None,
+        prompt="a dancer in a red room",
+        negative_prompt="frozen frame",
+        width=32,
+        height=20,
+        num_frames=2,
+        fps=24,
+        steps=5,
+        cfg=4.5,
+        seed=11,
+        device="cpu",
+    )
+    i2v = ivm.generate_video_model_frames(
+        engine="hunyuan_video15",
+        video_model_dir=model_dir,
+        base_model_dir=tmp_path / "base",
+        init_image=Image.new("RGB", (32, 20), color="white"),
+        prompt="the dancer turns",
+        negative_prompt="frozen frame",
+        width=32,
+        height=20,
+        num_frames=2,
+        fps=24,
+        steps=5,
+        cfg=5.5,
+        seed=12,
+        device="cpu",
+    )
+
+    assert len(t2v) == len(i2v) == 2
+    assert [name for name, _kwargs in calls] == ["FakeT2VPipeline", "FakeI2VPipeline"]
+    assert guider_calls == [4.5, 5.5]
+    assert tiling_calls == ["vae", "vae"]
+
+
 def test_video_model_cache_key_separates_cpu_offload(tmp_path: Path, monkeypatch) -> None:
     calls: list[dict[str, object]] = []
     scheduler_calls: list[dict[str, object]] = []

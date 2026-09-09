@@ -107,15 +107,6 @@ internal sealed class FfmpegVideoDecoder(MediaToolPaths tools) : IVideoDecoder
                 }
 
                 TimeSpan relativeTimestamp = TimeSpan.FromSeconds(frameIndex / metadata.FramesPerSecond);
-                if (paceFrames)
-                {
-                    TimeSpan delay = relativeTimestamp - playbackClock.Elapsed;
-                    if (delay > TimeSpan.Zero)
-                    {
-                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-                    }
-                }
-
                 OwnedCpuFrame frame = OwnedCpuFrame.Create(
                     owner,
                     frameLength,
@@ -126,6 +117,17 @@ internal sealed class FfmpegVideoDecoder(MediaToolPaths tools) : IVideoDecoder
                     timestamp: boundedStart + relativeTimestamp);
                 try
                 {
+                    // The frame must own its pooled buffer before an awaited delay:
+                    // canceling playback during pacing must release that buffer.
+                    if (paceFrames)
+                    {
+                        TimeSpan delay = relativeTimestamp - playbackClock.Elapsed;
+                        if (delay > TimeSpan.Zero)
+                        {
+                            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                        }
+                    }
+
                     submitFrame(frame);
                 }
                 catch

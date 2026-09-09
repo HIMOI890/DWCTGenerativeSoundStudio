@@ -684,6 +684,70 @@ public sealed class StudioApiClient : IDisposable
         return StreamResponseAsync(requestPath, callback, cancellationToken);
     }
 
+    public Task<EditorState> GetEditorStateAsync(
+        string projectId,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<EditorState>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/editor",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<JsonElement> GetDirectorDocumentAsync(string projectId, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<JsonElement>(HttpMethod.Get, $"/v1/projects/{EscapeIdentifier(projectId)}/director/document", null, true, cancellationToken);
+
+    public Task<JsonElement> GetDirectorWorkflowAsync(string projectId, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<JsonElement>(HttpMethod.Get, $"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow", null, true, cancellationToken);
+
+    public Task<JsonElement> PrepareDirectorWorkflowAsync(string projectId, DirectorApplyRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorApplyRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow/prepare", request, cancellationToken);
+
+    public Task<JsonElement> ReviewDirectorWorkflowAsync(string projectId, DirectorWorkflowReviewRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorWorkflowReviewRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow/review", request, cancellationToken);
+
+    public Task<JsonElement> ReviewReactiveWorkflowAsync(string projectId, DirectorReactiveReviewRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorReactiveReviewRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow/reactive/review", request, cancellationToken);
+
+    public Task<JsonElement> ApplyDirectorWorkflowAsync(string projectId, DirectorWorkflowReviewRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorWorkflowReviewRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow/apply", request, cancellationToken);
+
+    public Task<JsonElement> GetDirectorReadinessAsync(
+        string projectId,
+        string mode,
+        string engine,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync<JsonElement>(
+            HttpMethod.Get,
+            $"/v1/projects/{EscapeIdentifier(projectId)}/director/readiness?mode={Uri.EscapeDataString(mode)}&engine={Uri.EscapeDataString(engine)}",
+            null,
+            true,
+            cancellationToken);
+
+    public Task<JsonElement> GenerateDirectorAsync(string projectId, DirectorGenerationRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorGenerationRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/generate", request, cancellationToken);
+
+    public Task<JsonElement> GetDirectorDraftAsync(string projectId, string jobId, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<JsonElement>(HttpMethod.Get, $"/v1/projects/{EscapeIdentifier(projectId)}/director/drafts/{EscapeIdentifier(jobId)}", null, true, cancellationToken);
+
+    public Task<JsonElement> ApplyDirectorDraftAsync(string projectId, string jobId, DirectorApplyRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorApplyRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/drafts/{EscapeIdentifier(jobId)}/apply", request, cancellationToken);
+
+    public Task<JsonElement> SaveDirectorDocumentAsync(string projectId, DirectorUpdateRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorUpdateRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/document", request, cancellationToken);
+
+    public Task<JsonElement> GetDirectorPromptsAsync(string projectId, string engine, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<JsonElement>(HttpMethod.Get, $"/v1/projects/{EscapeIdentifier(projectId)}/director/prompts?engine={Uri.EscapeDataString(engine)}", null, true, cancellationToken);
+
+    public Task<EditorState> ExecuteEditorCommandAsync(
+        string projectId,
+        EditorCommandRequest request,
+        CancellationToken cancellationToken = default) =>
+        PostJsonAsync<EditorCommandRequest, EditorState>(
+            $"/v1/projects/{EscapeIdentifier(projectId)}/editor/commands",
+            request,
+            cancellationToken);
+
     public Task<JsonElement> SaveTimelineAsync(
         string projectId,
         JsonElement timeline,

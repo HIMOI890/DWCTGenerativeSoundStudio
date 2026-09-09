@@ -28,7 +28,6 @@ public sealed partial class TimelinePage : Page
     private const double ClipVerticalInset = 6;
     private const double MinimumPixelsPerSecond = 12;
     private const double MaximumPixelsPerSecond = 360;
-    private const int HistoryLimit = 50;
     private const string PointerToolSettingKey = "Timeline.PointerTool";
 
     private readonly DispatcherTimer _transportTimer = new()
@@ -36,8 +35,8 @@ public sealed partial class TimelinePage : Page
         Interval = TimeSpan.FromMilliseconds(1000 / DefaultFps)
     };
     private readonly Stopwatch _transportWatch = new();
-    private readonly List<JsonObject> _undoHistory = [];
-    private readonly List<JsonObject> _redoHistory = [];
+    private EditorHistoryState _editorHistory = new();
+    private long _editorRevision;
     private readonly ObservableCollection<CameraKeyframeListItem> _cameraKeyframeItems = [];
     private readonly ApplicationDataContainer? _settings;
 
@@ -222,14 +221,14 @@ public sealed partial class TimelinePage : Page
         try
         {
             var projectTask = App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
-            var timelineTask = App.Services.ApiClient.GetTimelineAsync(projectId, cancellationToken);
+            var timelineTask = App.Services.ApiClient.GetEditorStateAsync(projectId, cancellationToken);
             var recoveryTask = App.Services.ApiClient.GetRecoveryAsync(projectId, cancellationToken);
             await Task.WhenAll(projectTask, timelineTask, recoveryTask);
 
             _project = projectTask.Result.Project;
             _loadedProjectId = projectId;
             _loadedVariantIndex = App.Services.Session.SelectedVariantIndex;
-            _timelineDocument = ExtractTimeline(timelineTask.Result);
+            ApplyEditorState(timelineTask.Result);
             _recoveryDocument = JsonNode.Parse(recoveryTask.Result.GetRawText()) as JsonObject;
             _lanes = TimelineProjection.Project(_timelineDocument);
             _cameraKeyframes = TimelineCameraProjection.Project(_timelineDocument);
@@ -237,8 +236,6 @@ public sealed partial class TimelinePage : Page
             _positionSeconds = 0;
             _selectedLaneId = null;
             _selectedCameraKeyframeIdentity = null;
-            _undoHistory.Clear();
-            _redoHistory.Clear();
             _isDirty = false;
 
             RefreshEditor(updateRawText: true);
@@ -317,8 +314,8 @@ public sealed partial class TimelinePage : Page
         _selectedLaneId = null;
         _selectedCameraKeyframeIdentity = null;
         _selectedSourcePath = string.Empty;
-        _undoHistory.Clear();
-        _redoHistory.Clear();
+        _editorHistory = new();
+        _editorRevision = 0;
         _isDirty = false;
         _positionSeconds = 0;
         ResetAiEditProposal();
@@ -529,10 +526,10 @@ public sealed partial class TimelinePage : Page
         RulerCanvas.Children.Clear();
         RulerCanvas.Width = SurfaceWidth;
         double labelStep = ResolveRulerStep();
-        int tickCount = (int)Math.Ceiling(_durationSeconds / labelStep);
-        for (int index = 0; index <= tickCount; index++)
+        foreach (double seconds in TimelineViewport.RulerTicks(
+            _durationSeconds, _pixelsPerSecond, TimelineScroll.HorizontalOffset,
+            TimelineScroll.ViewportWidth, labelStep))
         {
-            double seconds = Math.Min(_durationSeconds, index * labelStep);
             double x = seconds * _pixelsPerSecond;
             var line = new Line
             {
@@ -576,8 +573,11 @@ public sealed partial class TimelinePage : Page
         TimelineCanvas.Width = SurfaceWidth;
         TimelineCanvas.Height = VisualTrackCount * TrackHeight;
         _selectedClipBorder = null;
+        TimelineVisibleRange visible = TimelineVisibleRange.Create(
+            TimelineScroll.HorizontalOffset, TimelineScroll.VerticalOffset,
+            TimelineScroll.ViewportWidth, TimelineScroll.ViewportHeight, _pixelsPerSecond, TrackHeight);
 
-        for (int trackIndex = 0; trackIndex < VisualTrackCount; trackIndex++)
+        for (int trackIndex = visible.FirstTrack; trackIndex < Math.Min(VisualTrackCount, visible.LastTrack + 1); trackIndex++)
         {
             var separator = new Line
             {
@@ -604,7 +604,8 @@ public sealed partial class TimelinePage : Page
             TimelineCanvas.Children.Add(empty);
         }
 
-        foreach (TimelineLaneDocument lane in TimelineProjection.OrderLanes(_lanes))
+        foreach (TimelineLaneDocument lane in TimelineProjection.OrderLanes(_lanes.Where(lane =>
+                     visible.Contains(lane.StartSeconds, lane.EndSeconds, lane.IsLayer ? OverlayVisualTrackIndex : lane.TrackIndex))))
         {
             Border border = CreateClipVisual(lane);
             TimelineCanvas.Children.Add(border);
@@ -614,7 +615,8 @@ public sealed partial class TimelinePage : Page
             }
         }
 
-        foreach (TimelineCameraKeyframeDocument keyframe in _cameraKeyframes)
+        foreach (TimelineCameraKeyframeDocument keyframe in _cameraKeyframes.Where(keyframe =>
+                     visible.Contains(keyframe.TimeSeconds, keyframe.TimeSeconds, CameraVisualTrackIndex)))
         {
             TimelineCanvas.Children.Add(CreateCameraKeyframeVisual(keyframe));
         }
@@ -833,6 +835,7 @@ public sealed partial class TimelinePage : Page
         bool enabled = lane is not null;
         bool videoAdjustmentsEnabled = lane is not null && IsVisualLane(lane);
         SelectedClipTitle.Text = lane?.Name ?? "No lane selected";
+        ExactSampleTextBox.Text = lane?.Source["start_sample"]?.GetValue<string>() ?? string.Empty;
         SelectedClipSubtitle.Text = lane is null
             ? "Select a clip or overlay to inspect its timing and media properties."
             : lane.IsLayer
@@ -1417,7 +1420,6 @@ public sealed partial class TimelinePage : Page
         }
 
         _timelineDocument = TimelineProjection.Rebuild(_timelineDocument, _lanes);
-        PushUndo(before);
         _selectedLaneId = selectionId;
         _selectedCameraKeyframeIdentity = null;
         _isDirty = true;
@@ -1434,7 +1436,6 @@ public sealed partial class TimelinePage : Page
         string? cameraSelectionId = null)
     {
         _timelineDocument = document;
-        PushUndo(before);
         _selectedLaneId = selectionId;
         _selectedCameraKeyframeIdentity = cameraSelectionId;
         _isDirty = true;
@@ -1463,15 +1464,14 @@ public sealed partial class TimelinePage : Page
             cameraSelectionId: selectionId);
     }
 
-    private void PushUndo(JsonObject snapshot)
+    [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(_timelineDocument))]
+    private void ApplyEditorState(EditorState state)
     {
-        _undoHistory.Add(CloneDocument(snapshot));
-        if (_undoHistory.Count > HistoryLimit)
-        {
-            _undoHistory.RemoveAt(0);
-        }
-
-        _redoHistory.Clear();
+        _timelineDocument = JsonNode.Parse(state.Timeline.GetRawText()) as JsonObject
+            ?? throw new InvalidDataException("Backend returned an invalid editor timeline.");
+        _editorHistory = state.History;
+        _editorRevision = state.Revision;
+        _isDirty = false;
     }
 
     private static JsonObject CloneDocument(JsonObject source) =>
@@ -1490,24 +1490,9 @@ public sealed partial class TimelinePage : Page
 
         try
         {
-            JsonElement metadata = ToJsonElement(new JsonObject
-            {
-                ["editor"] = "winui",
-                ["selected_clip_id"] = _selectedLaneId,
-                ["selected_camera_keyframe_id"] = _selectedCameraKeyframeIdentity
-            });
-            await App.Services.ApiClient.AutosaveTimelineAsync(
-                _loadedProjectId,
-                ToJsonElement(_timelineDocument),
-                metadata,
-                reason,
-                StudioPageHelpers.ExpectedRevision(_project),
-                _pageCancellation?.Token ?? CancellationToken.None);
-            await RefreshProjectRevisionAsync(
-                _loadedProjectId,
-                _pageCancellation?.Token ?? CancellationToken.None);
-            StatusText.Text = "Autosaved.";
-            await RefreshRecoveryAsync();
+            SetBusy(true);
+            await PersistEditorAsync("replace", reason, _pageCancellation?.Token ?? CancellationToken.None);
+            StatusText.Text = "Edit saved with project undo history.";
         }
         catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true)
         {
@@ -1520,40 +1505,116 @@ public sealed partial class TimelinePage : Page
         {
             ShowInfo($"Autosave failed: {ex.Message}", InfoBarSeverity.Warning);
         }
+        finally
+        {
+            SetBusy(false);
+        }
     }
 
-    private async void Undo_Click(object sender, RoutedEventArgs e)
+    private async Task PersistEditorAsync(string action, string label, CancellationToken cancellationToken)
     {
-        if (_timelineDocument is null || _undoHistory.Count == 0)
+        string projectId = _loadedProjectId ?? throw new InvalidOperationException("Load a project first.");
+        if (_timelineDocument is null || _editorRevision < 1)
+        {
+            throw new InvalidOperationException("Reload the editor before editing.");
+        }
+        var request = new EditorCommandRequest(Guid.NewGuid().ToString("N"), _editorRevision, action, label,
+            action == "replace" ? ToJsonElement(_timelineDocument) : null);
+        EditorState result = await App.Services.ApiClient.ExecuteEditorCommandAsync(projectId, request, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!string.Equals(projectId, _loadedProjectId, StringComparison.Ordinal))
         {
             return;
         }
-
-        _redoHistory.Add(CloneDocument(_timelineDocument));
-        JsonObject snapshot = _undoHistory[^1];
-        _undoHistory.RemoveAt(_undoHistory.Count - 1);
-        _timelineDocument = CloneDocument(snapshot);
-        _isDirty = true;
+        ApplyEditorState(result);
         RefreshEditor(updateRawText: true);
-        await AutosaveAsync("timeline undo");
-        await RefreshPreviewAsync(force: false);
+        await RefreshProjectRevisionAsync(projectId, cancellationToken);
     }
 
-    private async void Redo_Click(object sender, RoutedEventArgs e)
+    private async void Undo_Click(object sender, RoutedEventArgs e) => await ApplyHistoryAsync("undo");
+
+    private async void AddAudioTrack_Click(object sender, RoutedEventArgs e) =>
+        await ExecuteNativeEditAsync(new JsonObject { ["kind"] = "add_track", ["track_type"] = "audio" }, "Add audio track");
+
+    private async void AddVideoTrack_Click(object sender, RoutedEventArgs e) =>
+        await ExecuteNativeEditAsync(new JsonObject { ["kind"] = "add_track", ["track_type"] = "video" }, "Add video track");
+
+    private async void MoveExact_Click(object sender, RoutedEventArgs e) => await EditAtExactSampleAsync("move");
+
+    private async void SplitExact_Click(object sender, RoutedEventArgs e) => await EditAtExactSampleAsync("split");
+
+    private async Task EditAtExactSampleAsync(string kind)
     {
-        if (_timelineDocument is null || _redoHistory.Count == 0)
+        if (SelectedLane is not { IsLayer: false } lane || _timelineDocument?["tracks"] is not JsonArray tracks)
         {
             return;
         }
+        if (!long.TryParse(ExactSampleTextBox.Text, NumberStyles.None, CultureInfo.InvariantCulture, out long position))
+        {
+            ShowInfo("Enter a nonnegative whole sample position within the 64-bit range.", InfoBarSeverity.Warning);
+            return;
+        }
+        await ExecuteNativeEditAsync(new JsonObject
+        {
+            ["kind"] = kind,
+            ["track_id"] = tracks[lane.TrackIndex]?["id"]?.GetValue<string>(),
+            ["clip_id"] = lane.Source["id"]?.GetValue<string>(),
+            ["position"] = position.ToString(CultureInfo.InvariantCulture),
+            ["snap"] = "sample"
+        }, kind == "move" ? "Move clip to exact sample" : "Split clip at exact sample");
+    }
 
-        _undoHistory.Add(CloneDocument(_timelineDocument));
-        JsonObject snapshot = _redoHistory[^1];
-        _redoHistory.RemoveAt(_redoHistory.Count - 1);
-        _timelineDocument = CloneDocument(snapshot);
-        _isDirty = true;
-        RefreshEditor(updateRawText: true);
-        await AutosaveAsync("timeline redo");
-        await RefreshPreviewAsync(force: false);
+    private async Task ExecuteNativeEditAsync(JsonObject operation, string label, JsonObject? precedingOperation = null)
+    {
+        if (_isBusy || _isDirty || _editorRevision < 1 || _loadedProjectId is not string projectId)
+        {
+            return;
+        }
+        SetBusy(true);
+        CancellationToken token = _pageCancellation?.Token ?? CancellationToken.None;
+        try
+        {
+            var request = new EditorCommandRequest(Guid.NewGuid().ToString("N"), _editorRevision, "edit", label,
+                Operations: precedingOperation is null ? [ToJsonElement(operation)] : [ToJsonElement(precedingOperation), ToJsonElement(operation)]);
+            EditorState result = await App.Services.ApiClient.ExecuteEditorCommandAsync(projectId, request, token);
+            token.ThrowIfCancellationRequested();
+            if (projectId != _loadedProjectId) return;
+            ApplyEditorState(result);
+            if (operation["kind"]?.GetValue<string>() == "add_clip")
+            {
+                _selectedLaneId = operation["new_id"]?.GetValue<string>();
+                _selectedCameraKeyframeIdentity = null;
+            }
+            RefreshEditor(updateRawText: true);
+            await RefreshProjectRevisionAsync(projectId, token);
+            await RefreshPreviewAsync(force: false);
+            StatusText.Text = $"{label} saved.";
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (ProjectRevisionConflictException conflict) { await HandleProjectRevisionConflictAsync(conflict); }
+        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
+        finally { SetBusy(false); }
+    }
+
+    private async void Redo_Click(object sender, RoutedEventArgs e) => await ApplyHistoryAsync("redo");
+
+    private async Task ApplyHistoryAsync(string action)
+    {
+        if (_isBusy || _timelineDocument is null || _isDirty ||
+            (action == "undo" ? !_editorHistory.CanUndo : !_editorHistory.CanRedo))
+        {
+            return;
+        }
+        SetBusy(true);
+        try
+        {
+            await PersistEditorAsync(action, action == "undo" ? "Undo" : "Redo", _pageCancellation?.Token ?? CancellationToken.None);
+            await RefreshPreviewAsync(force: false);
+        }
+        catch (OperationCanceledException) when (_pageCancellation?.IsCancellationRequested == true) { }
+        catch (ProjectRevisionConflictException conflict) { await HandleProjectRevisionConflictAsync(conflict); }
+        catch (Exception ex) { ShowInfo(ex.Message, InfoBarSeverity.Error); }
+        finally { SetBusy(false); }
     }
 
     private async void SaveTimeline_Click(object sender, RoutedEventArgs e)
@@ -1593,12 +1654,10 @@ public sealed partial class TimelinePage : Page
             throw new InvalidOperationException("Load a project Timeline before saving.");
         }
 
-        await App.Services.ApiClient.SaveTimelineAsync(
-            _loadedProjectId,
-            ToJsonElement(_timelineDocument),
-            StudioPageHelpers.ExpectedRevision(_project),
-            cancellationToken);
-        await RefreshProjectRevisionAsync(_loadedProjectId, cancellationToken);
+        if (_isDirty)
+        {
+            await PersistEditorAsync("replace", "Save timeline", cancellationToken);
+        }
         _isDirty = false;
         StatusText.Text = "Timeline saved.";
         await RefreshRecoveryAsync();
@@ -2014,7 +2073,6 @@ public sealed partial class TimelinePage : Page
             return;
         }
 
-        JsonObject before = CloneDocument(_timelineDocument);
         int trackIndex = SelectedLane is { IsLayer: false } selected ? selected.TrackIndex : 0;
         if (TimelineProjection.IsTrackLocked(_timelineDocument, trackIndex))
         {
@@ -2022,14 +2080,23 @@ public sealed partial class TimelinePage : Page
             return;
         }
 
-        TimelineLaneDocument clip = TimelineProjection.CreateLane(
-            $"Clip {_lanes.Count(lane => !lane.IsLayer) + 1}",
-            "video",
-            start,
-            end);
-        clip = TimelineProjection.ReassignTrack(clip, trackIndex);
-        _lanes = [.. _lanes, clip];
-        await CommitLanesAsync(before, "timeline clip add", clip.StableId);
+        var tracks = _timelineDocument["tracks"] as JsonArray;
+        string trackId = tracks is not null && trackIndex < tracks.Count
+            ? tracks[trackIndex]?["id"]?.GetValue<string>() ?? string.Empty
+            : string.Empty;
+        JsonObject? addTrack = null;
+        if (string.IsNullOrEmpty(trackId))
+        {
+            trackId = Guid.NewGuid().ToString("N");
+            addTrack = new JsonObject { ["kind"] = "add_track", ["track_type"] = "video", ["new_id"] = trackId };
+        }
+        await ExecuteNativeEditAsync(new JsonObject
+        {
+            ["kind"] = "add_clip", ["track_id"] = trackId, ["new_id"] = Guid.NewGuid().ToString("N"),
+            ["name"] = $"Clip {_lanes.Count(lane => !lane.IsLayer) + 1}",
+            ["start_seconds"] = start.ToString("R", CultureInfo.InvariantCulture),
+            ["end_seconds"] = end.ToString("R", CultureInfo.InvariantCulture)
+        }, "Add timeline clip", addTrack);
     }
 
     private async void AddOverlayAtPlayhead_Click(object sender, RoutedEventArgs e)
@@ -2586,6 +2653,7 @@ public sealed partial class TimelinePage : Page
             null,
             true);
         _syncingScroll = false;
+        if (_timelineDocument is not null && _dragBorder is null) RenderTimeline();
     }
 
     private void TimelineScroll_ViewChanged(
@@ -2609,6 +2677,17 @@ public sealed partial class TimelinePage : Page
             null,
             true);
         _syncingScroll = false;
+        RenderRuler();
+        if (_timelineDocument is not null && _dragBorder is null) RenderTimeline();
+    }
+
+    private void TimelineScroll_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_timelineDocument is not null)
+        {
+            RenderRuler();
+            if (_dragBorder is null) RenderTimeline();
+        }
     }
 
     private void TimelineCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
@@ -3325,8 +3404,15 @@ public sealed partial class TimelinePage : Page
         bool canRunAutomation = hasTimeline && !_isAutomationBusy;
         bool hasProject = !string.IsNullOrWhiteSpace(_loadedProjectId);
         bool hasSource = !string.IsNullOrWhiteSpace(_selectedSourcePath);
-        UndoButton.IsEnabled = hasTimeline && _undoHistory.Count > 0;
-        RedoButton.IsEnabled = hasTimeline && _redoHistory.Count > 0;
+        UndoButton.IsEnabled = hasTimeline && !_isDirty && _editorHistory.CanUndo;
+        EditorTrackCommands.IsEnabled = hasTimeline && !_isDirty;
+        bool exactEnabled = hasTimeline && !_isDirty && SelectedLane is { IsLayer: false } exactLane && !IsLaneLocked(exactLane);
+        MoveExactButton.IsEnabled = exactEnabled;
+        SplitExactButton.IsEnabled = exactEnabled;
+        ExactSampleTextBox.IsEnabled = exactEnabled;
+        RedoButton.IsEnabled = hasTimeline && !_isDirty && _editorHistory.CanRedo;
+        ToolTipService.SetToolTip(UndoButton, _editorHistory.UndoLabel ?? "No saved edit to undo");
+        ToolTipService.SetToolTip(RedoButton, _editorHistory.RedoLabel ?? "No saved edit to redo");
         SaveButton.IsEnabled = hasTimeline;
         PlayPauseButton.IsEnabled = hasTimeline;
         ApplyInspectorButton.IsEnabled = hasEditableLaneSelection;

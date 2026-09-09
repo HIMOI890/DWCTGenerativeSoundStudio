@@ -59,6 +59,37 @@
 
                 <Border Style="{StaticResource StudioCardBorderStyle}">
                     <StackPanel Spacing="12">
+                        <TextBlock Text="Story Bible and scenes" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        <TextBox x:Name="StoryThemeBox" Header="Project theme" AutomationProperties.AutomationId="Director.StoryTheme" />
+                        <TextBox x:Name="StoryStyleBox" Header="Visual style" AutomationProperties.AutomationId="Director.StoryStyle" />
+                        <TextBox x:Name="DirectorInstructionBox" Header="Direction for Qwen3-VL" TextWrapping="Wrap" AcceptsReturn="True" AutomationProperties.AutomationId="Director.Instruction" />
+                        <CommandBar DefaultLabelPosition="Right">
+                            <AppBarButton Label="Generate draft" Icon="Play" Click="GenerateDirector_Click" AutomationProperties.AutomationId="Director.Generate" />
+                            <AppBarButton Label="Review selected job" Icon="Refresh" Click="ReviewDirector_Click" AutomationProperties.AutomationId="Director.ReviewDraft" />
+                            <AppBarButton x:Name="ApplyDirectorDraftButton" Label="Apply reviewed draft" Icon="Accept" Click="ApplyDirectorDraft_Click" IsEnabled="False" AutomationProperties.AutomationId="Director.ApplyDraft" />
+                            <AppBarButton Label="Open Queue" Icon="List" Click="OpenQueue_Click" />
+                        </CommandBar>
+                        <TextBlock Text="Generation uses saved scenes and returns a draft. Select a job in Queue to review it here; cancellation is available in Queue." TextWrapping="Wrap" />
+                        <TextBox x:Name="DirectorDraftBox" Header="Draft review" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="300" AutomationProperties.AutomationId="Director.Draft" />
+                        <Expander Header="Advanced: structured scenes" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                            <TextBox x:Name="SceneSpecsBox" Header="SceneSpecs (JSON array with scene_id, start_sample, end_sample and intent)" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="160" MaxHeight="360" AutomationProperties.AutomationId="Director.SceneSpecs" />
+                        </Expander>
+                        <CommandBar DefaultLabelPosition="Right">
+                            <AppBarButton x:Name="SaveDirectorButton" Label="Save direction" Icon="Save" Click="SaveDirector_Click" AutomationProperties.AutomationId="Director.SaveDocument" />
+                            <AppBarButton x:Name="CompileDirectorButton" Label="Prepare prompts" Icon="Preview" Click="CompileDirector_Click" AutomationProperties.AutomationId="Director.CompilePrompts" />
+                        </CommandBar>
+                        <ComboBox x:Name="PromptEngineBox" Header="Prompt preview engine" SelectedIndex="0">
+                            <ComboBoxItem Content="HunyuanVideo-1.5" Tag="hunyuan_video15" />
+                            <ComboBoxItem Content="LTX-2.5" Tag="ltx_25" />
+                            <ComboBoxItem Content="External provider" Tag="external" />
+                        </ComboBox>
+                        <TextBox x:Name="PromptPreviewBox" Header="Prepared prompts" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" MaxHeight="320" AutomationProperties.AutomationId="Director.PromptPreview" />
+                        <TextBlock Text="Preparing prompts does not start generation. Save direction before preparing prompts." TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource StudioCardBorderStyle}">
+                    <StackPanel Spacing="12">
                         <TextBlock Text="Production bridge" Style="{ThemeResource SubtitleTextBlockStyle}" />
                         <TextBlock
                             Text="Project and variant choices are shared immediately with Planner, Reactive Lab, Workspace, Timeline, Render, Review, and Studio Forge."

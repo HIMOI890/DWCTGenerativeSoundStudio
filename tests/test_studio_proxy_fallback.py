@@ -271,5 +271,6 @@ def test_audio_upload_endpoint_persists_large_audio_payload(tmp_path, monkeypatc
     assert saved.meta["audio"]["filename"] == "long.wav"
     assert saved.meta["audio"]["size_bytes"] == len(payload)
     assert "analysis" not in saved.meta
-    assert "last_plan" not in saved.meta
+    assert saved.meta["last_plan"] == proj.meta["last_plan"]
+    assert saved.meta["analysis_history"][-1] == proj.meta["analysis"]
     assert saved.meta["timeline"] == {"layers": [{"id": "keep"}]}

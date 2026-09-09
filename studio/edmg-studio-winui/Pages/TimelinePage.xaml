@@ -29,6 +29,12 @@
                 </StackPanel>
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <CommandBar x:Name="EditorTrackCommands" DefaultLabelPosition="Right">
+                    <AppBarButton Label="Add audio track" Icon="Audio" Click="AddAudioTrack_Click"
+                                  AutomationProperties.AutomationId="Timeline.AddAudioTrack" />
+                    <AppBarButton Label="Add video track" Icon="Video" Click="AddVideoTrack_Click"
+                                  AutomationProperties.AutomationId="Timeline.AddVideoTrack" />
+                </CommandBar>
                 <Button x:Name="UndoButton"
                         AutomationProperties.AutomationId="Timeline.Undo"
                         Content="Undo"
@@ -219,7 +225,8 @@
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollMode="Enabled"
                                   VerticalScrollMode="Enabled"
-                                  ViewChanged="TimelineScroll_ViewChanged">
+                                  ViewChanged="TimelineScroll_ViewChanged"
+                                  SizeChanged="TimelineScroll_SizeChanged">
                         <Canvas x:Name="TimelineCanvas"
                                 AutomationProperties.AutomationId="Timeline.ClipSurface"
                                 Background="{ThemeResource StudioCardBrush}"
@@ -243,6 +250,21 @@
                                                TextWrapping="Wrap"
                                                Style="{StaticResource StudioCaptionTextStyle}" />
                                 </StackPanel>
+
+                                <Expander Header="Sample-accurate editing" HorizontalAlignment="Stretch">
+                                    <StackPanel Spacing="8">
+                                        <TextBox x:Name="ExactSampleTextBox" Header="Position in project samples"
+                                                 AutomationProperties.AutomationId="Timeline.ExactSamplePosition" />
+                                        <TextBlock Text="Move preserves duration. Split advances the source offset without changing the media."
+                                                   TextWrapping="Wrap" Style="{StaticResource StudioCaptionTextStyle}" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Button x:Name="MoveExactButton" Content="Move" Click="MoveExact_Click"
+                                                    AutomationProperties.AutomationId="Timeline.MoveExact" />
+                                            <Button x:Name="SplitExactButton" Content="Split" Click="SplitExact_Click"
+                                                    AutomationProperties.AutomationId="Timeline.SplitExact" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Expander>
 
                                 <Grid ColumnSpacing="8">
                                     <Grid.ColumnDefinitions>

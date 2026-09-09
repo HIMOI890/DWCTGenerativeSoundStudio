@@ -10,6 +10,50 @@ namespace EdmgStudio.Core.Tests;
 public sealed class StudioApiClientTests
 {
     [TestMethod]
+    public void DirectorGenerationRequest_UsesSharedWorkspacePolicyFields()
+    {
+        string json = JsonSerializer.Serialize(
+            new DirectorGenerationRequest(
+                9,
+                "director-op",
+                "Keep the approved identity.",
+                "quality",
+                "hunyuan_video15",
+                false));
+        using JsonDocument body = JsonDocument.Parse(json);
+        Assert.AreEqual("quality", body.RootElement.GetProperty("mode").GetString());
+        Assert.AreEqual("hunyuan_video15", body.RootElement.GetProperty("renderer_engine").GetString());
+        Assert.IsFalse(body.RootElement.GetProperty("allow_external").GetBoolean());
+    }
+
+    [TestMethod]
+    public async Task EditorCommands_KeepExactSamplesAndOperationIdentity()
+    {
+        string? capturedBody = null;
+        using var httpClient = new HttpClient(new RecordingHandler(async (request, token) =>
+        {
+            if (request.Method == HttpMethod.Post)
+            {
+                Assert.AreEqual("/v1/projects/p1/editor/commands", request.RequestUri!.AbsolutePath);
+                capturedBody = await request.Content!.ReadAsStringAsync(token);
+            }
+            return JsonResponse("""{"ok":true,"revision":7,"timeline":{"tracks":[{"id":"t","clips":[{"id":"c","start_sample":"9007199254740993","end_sample":"9007199254788993"}]}]},"history":{"can_undo":true,"can_redo":false,"undo_label":"Exact move"}}""");
+        }));
+        using var client = new StudioApiClient(
+            new StaticEndpointProvider(new Uri("http://127.0.0.1:7863/")),
+            new StaticTokenProvider("test-token"), httpClient);
+        EditorState state = await client.GetEditorStateAsync("p1");
+        Assert.AreEqual(7L, state.Revision);
+        Assert.IsTrue(state.History.CanUndo);
+        Assert.AreEqual("9007199254740993", state.Timeline.GetProperty("tracks")[0].GetProperty("clips")[0].GetProperty("start_sample").GetString());
+        await client.ExecuteEditorCommandAsync("p1", new EditorCommandRequest("same-operation", 7, "replace", "Exact move", state.Timeline));
+        using JsonDocument body = JsonDocument.Parse(capturedBody!);
+        Assert.AreEqual("same-operation", body.RootElement.GetProperty("operation_id").GetString());
+        Assert.AreEqual(7L, body.RootElement.GetProperty("expected_revision").GetInt64());
+        Assert.IsFalse(body.RootElement.TryGetProperty("operations", out _));
+    }
+
+    [TestMethod]
     public async Task ProjectWorkflow_UsesTheExactStudioHttpContract()
     {
         var captured = new List<CapturedRequest>();

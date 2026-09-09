@@ -1,0 +1,680 @@
+{
+  "id": "b567325607e24abbbe7ce3bb8a967a35",
+  "name": "Draft",
+  "created_at": "2026-09-07 23:40:16",
+  "updated_at": "2026-09-07 23:40:16",
+  "revision": 6,
+  "meta": {
+    "last_plan": {
+      "variants": [
+        {
+          "duration_s": 4,
+          "scenes": [
+            {
+              "id": "a",
+              "start_s": 0,
+              "end_s": 2,
+              "character_lock": "a person in a red coat",
+              "action": "walks across a bridge",
+              "start_state": {
+                "position": "left"
+              },
+              "end_state": {
+                "position": "center",
+                "hand": "raised"
+              },
+              "operational_prompt": "a person in a red coat. Single prominent subject, same identity and props. walks across a bridge."
+            },
+            {
+              "id": "b",
+              "start_s": 2,
+              "end_s": 4,
+              "character_lock": "a person in a red coat",
+              "action": "waves",
+              "start_state": {
+                "position": "wrong"
+              },
+              "end_state": {
+                "position": "right"
+              },
+              "operational_prompt": "a person in a red coat. Single prominent subject, same identity and props. waves."
+            }
+          ],
+          "schedule_draft": {
+            "schema_version": 1,
+            "status": "draft",
+            "project_id": "b567325607e24abbbe7ce3bb8a967a35",
+            "source_project_revision": 5,
+            "source_analysis_revision": "44136fa355b3678a1146ad16",
+            "source_plan_revision": "ed1096de0325f139934e4fe8",
+            "variant_index": 0,
+            "transport": {
+              "fps": 24,
+              "duration_s": 4.0,
+              "bpm": null
+            },
+            "prompt_anchors": [
+              {
+                "id": "planner:0:a:prompt-start:0",
+                "owner": "studio_planner",
+                "source_id": "a",
+                "t": 0.0,
+                "frame": 0,
+                "reason": "Scene 1 start",
+                "prompt": "a person in a red coat. Single prominent subject, same identity and props. walks across a bridge.",
+                "negative_prompt": "",
+                "end_s": 2.0,
+                "boundary": "start"
+              },
+              {
+                "id": "planner:0:a:prompt-end:2",
+                "owner": "studio_planner",
+                "source_id": "a",
+                "t": 2.0,
+                "frame": 48,
+                "reason": "Scene 1 end",
+                "prompt": "a person in a red coat. Single prominent subject, same identity and props. walks across a bridge.",
+                "negative_prompt": "",
+                "end_s": 2.0,
+                "boundary": "end"
+              },
+              {
+                "id": "planner:0:b:prompt-start:2",
+                "owner": "studio_planner",
+                "source_id": "b",
+                "t": 2.0,
+                "frame": 48,
+                "reason": "Scene 2 start",
+                "prompt": "a person in a red coat. Single prominent subject, same identity and props. waves.",
+                "negative_prompt": "",
+                "end_s": 4.0,
+                "boundary": "start"
+              },
+              {
+                "id": "planner:0:b:prompt-end:4",
+                "owner": "studio_planner",
+                "source_id": "b",
+                "t": 4.0,
+                "frame": 96,
+                "reason": "Scene 2 end",
+                "prompt": "a person in a red coat. Single prominent subject, same identity and props. waves.",
+                "negative_prompt": "",
+                "end_s": 4.0,
+                "boundary": "end"
+              }
+            ],
+            "image_anchors": [
+              {
+                "id": "planner:0:a:anchor-start:0",
+                "owner": "studio_planner",
+                "source_id": "a",
+                "t": 0.0,
+                "frame": 0,
+                "reason": "Exact scene continuity boundary",
+                "state": {
+                  "position": "left"
+                },
+                "locks": {
+                  "setting": "",
+                  "character_lock": "a person in a red coat",
+                  "style_lock": "",
+                  "shot_type": "",
+                  "screen_direction": "",
+                  "palette": ""
+                },
+                "boundary": "start"
+              },
+              {
+                "id": "planner:0:a:anchor-end:2",
+                "owner": "studio_planner",
+                "source_id": "a",
+                "t": 2.0,
+                "frame": 48,
+                "reason": "Exact scene continuity boundary",
+                "state": {
+                  "position": "center",
+                  "hand": "raised"
+                },
+                "locks": {
+                  "setting": "",
+                  "character_lock": "a person in a red coat",
+                  "style_lock": "",
+                  "shot_type": "",
+                  "screen_direction": "",
+                  "palette": ""
+                },
+                "boundary": "end"
+              },
+              {
+                "id": "planner:0:b:anchor-start:2",
+                "owner": "studio_planner",
+                "source_id": "b",
+                "t": 2.0,
+                "frame": 48,
+                "reason": "Exact scene continuity boundary",
+                "state": {
+                  "position": "center",
+                  "hand": "raised"
+                },
+                "locks": {
+                  "setting": "",
+                  "character_lock": "a person in a red coat",
+                  "style_lock": "",
+                  "shot_type": "",
+                  "screen_direction": "",
+                  "palette": ""
+                },
+                "boundary": "start"
+              },
+              {
+                "id": "planner:0:b:anchor-end:4",
+                "owner": "studio_planner",
+                "source_id": "b",
+                "t": 4.0,
+                "frame": 96,
+                "reason": "Exact scene continuity boundary",
+                "state": {
+                  "position": "right"
+                },
+                "locks": {
+                  "setting": "",
+                  "character_lock": "a person in a red coat",
+                  "style_lock": "",
+                  "shot_type": "",
+                  "screen_direction": "",
+                  "palette": ""
+                },
+                "boundary": "end"
+              }
+            ],
+            "camera_keys": [
+              {
+                "id": "planner:0:a:camera:0",
+                "owner": "studio_planner",
+                "source_id": "a",
+                "t": 0.0,
+                "frame": 0,
+                "reason": "Scene boundary",
+                "zoom": 1.00344,
+                "pan_x": 0.0,
+                "pan_y": 0.0,
+                "rotation_deg": 0.0,
+                "intent": ""
+              },
+              {
+                "id": "planner:0:a:camera:2",
+                "owner": "studio_planner",
+                "source_id": "a",
+                "t": 2.0,
+                "frame": 48,
+                "reason": "Scene boundary",
+                "zoom": 1.00499,
+                "pan_x": 0.0,
+                "pan_y": 0.0,
+                "rotation_deg": 0.0,
+                "intent": ""
+              },
+              {
+                "id": "planner:0:b:camera:2",
+                "owner": "studio_planner",
+                "source_id": "b",
+                "t": 2.0,
+                "frame": 48,
+                "reason": "Scene boundary",
+                "zoom": 1.00568,
+                "pan_x": 0.0,
+                "pan_y": 0.0,
+                "rotation_deg": 0.0,
+                "intent": ""
+              },
+              {
+                "id": "planner:0:b:camera:4",
+                "owner": "studio_planner",
+                "source_id": "b",
+                "t": 4.0,
+                "frame": 96,
+                "reason": "Scene boundary",
+                "zoom": 1.00599,
+                "pan_x": 0.0,
+                "pan_y": 0.0,
+                "rotation_deg": 0.0,
+                "intent": ""
+              }
+            ],
+            "motion_keys": [
+              {
+                "id": "planner:0:a:motion:0",
+                "owner": "studio_planner",
+                "source_id": "a",
+                "t": 0.0,
+                "frame": 0,
+                "reason": "Scene boundary",
+                "motion_score": 0.1375,
+                "strength": 0.2844,
+                "anchor_strength": 0.15,
+                "cfg": 6.0,
+                "steps": 15,
+                "subject_motion": 0.1375,
+                "environment_motion": 0.0344
+              },
+              {
+                "id": "planner:0:a:motion:2",
+                "owner": "studio_planner",
+                "source_id": "a",
+                "t": 2.0,
+                "frame": 48,
+                "reason": "Scene boundary",
+                "motion_score": 0.1994,
+                "strength": 0.2999,
+                "anchor_strength": 0.15,
+                "cfg": 6.0,
+                "steps": 15,
+                "subject_motion": 0.1994,
+                "environment_motion": 0.0498
+              },
+              {
+                "id": "planner:0:b:motion:2",
+                "owner": "studio_planner",
+                "source_id": "b",
+                "t": 2.0,
+                "frame": 48,
+                "reason": "Scene boundary",
+                "motion_score": 0.2272,
+                "strength": 0.3068,
+                "anchor_strength": 0.15,
+                "cfg": 6.0,
+                "steps": 15,
+                "subject_motion": 0.2272,
+                "environment_motion": 0.0568
+              },
+              {
+                "id": "planner:0:b:motion:4",
+                "owner": "studio_planner",
+                "source_id": "b",
+                "t": 4.0,
+                "frame": 96,
+                "reason": "Scene boundary",
+                "motion_score": 0.2397,
+                "strength": 0.3099,
+                "anchor_strength": 0.15,
+                "cfg": 6.0,
+                "steps": 15,
+                "subject_motion": 0.2397,
+                "environment_motion": 0.0599
+              }
+            ],
+            "markers": [
+              {
+                "id": "planner:0:a:scene:0",
+                "owner": "studio_planner",
+                "source_id": "a",
+                "t": 0.0,
+                "frame": 0,
+                "reason": "Scene boundary",
+                "label": "Scene 1"
+              },
+              {
+                "id": "planner:0:b:scene:2",
+                "owner": "studio_planner",
+                "source_id": "b",
+                "t": 2.0,
+                "frame": 48,
+                "reason": "Scene boundary",
+                "label": "Scene 2"
+              }
+            ],
+            "warnings": [
+              "No stable BPM: timing uses scene boundaries and available analysis events.",
+              "No transcript: no lyric-derived cues were invented.",
+              "No usable energy curve: motion uses restrained scene defaults."
+            ],
+            "provenance": {
+              "compiler": "studio_planner_schedule",
+              "version": 1
+            },
+            "summary": {
+              "scenes": 2,
+              "prompt_anchors": 4,
+              "image_anchors": 4,
+              "camera_keys": 4,
+              "motion_keys": 4,
+              "markers": 2,
+              "warnings": 3
+            },
+            "schedule_revision": "c69b28b138a19084387ef2ab",
+            "generated_at": 1788838816.690141
+          }
+        }
+      ]
+    },
+    "timeline": {
+      "tracks": [
+        {
+          "id": "user",
+          "clips": []
+        },
+        {
+          "id": "planner:prompt",
+          "name": "Planner prompt",
+          "owner": "studio_planner",
+          "type": "prompt",
+          "schedule_revision": "c69b28b138a19084387ef2ab",
+          "clips": [
+            {
+              "id": "planner:0:a:prompt-start:0",
+              "owner": "studio_planner",
+              "source_id": "a",
+              "start_s": 0.0,
+              "end_s": 2.0,
+              "data": {
+                "prompt": "a person in a red coat. Single prominent subject, same identity and props. walks across a bridge.",
+                "negative_prompt": ""
+              }
+            },
+            {
+              "id": "planner:0:b:prompt-start:2",
+              "owner": "studio_planner",
+              "source_id": "b",
+              "start_s": 2.0,
+              "end_s": 4.0,
+              "data": {
+                "prompt": "a person in a red coat. Single prominent subject, same identity and props. waves.",
+                "negative_prompt": ""
+              }
+            }
+          ]
+        },
+        {
+          "id": "planner:keyimage",
+          "name": "Planner keyimage",
+          "owner": "studio_planner",
+          "type": "keyimage",
+          "schedule_revision": "c69b28b138a19084387ef2ab",
+          "clips": [
+            {
+              "id": "planner:0:a:anchor-start:0",
+              "owner": "studio_planner",
+              "source_id": "a",
+              "start_s": 0.0,
+              "end_s": 0.041666666666666664,
+              "data": {
+                "id": "planner:0:a:anchor-start:0",
+                "owner": "studio_planner",
+                "source_id": "a",
+                "t": 0.0,
+                "frame": 0,
+                "reason": "Exact scene continuity boundary",
+                "state": {
+                  "position": "left"
+                },
+                "locks": {
+                  "setting": "",
+                  "character_lock": "a person in a red coat",
+                  "style_lock": "",
+                  "shot_type": "",
+                  "screen_direction": "",
+                  "palette": ""
+                },
+                "boundary": "start"
+              }
+            },
+            {
+              "id": "planner:0:a:anchor-end:2",
+              "owner": "studio_planner",
+              "source_id": "a",
+              "start_s": 2.0,
+              "end_s": 2.0416666666666665,
+              "data": {
+                "id": "planner:0:a:anchor-end:2",
+                "owner": "studio_planner",
+                "source_id": "a",
+                "t": 2.0,
+                "frame": 48,
+                "reason": "Exact scene continuity boundary",
+                "state": {
+                  "position": "center",
+                  "hand": "raised"
+                },
+                "locks": {
+                  "setting": "",
+                  "character_lock": "a person in a red coat",
+                  "style_lock": "",
+                  "shot_type": "",
+                  "screen_direction": "",
+                  "palette": ""
+                },
+                "boundary": "end"
+              }
+            },
+            {
+              "id": "planner:0:b:anchor-start:2",
+              "owner": "studio_planner",
+              "source_id": "b",
+              "start_s": 2.0,
+              "end_s": 2.0416666666666665,
+              "data": {
+                "id": "planner:0:b:anchor-start:2",
+                "owner": "studio_planner",
+                "source_id": "b",
+                "t": 2.0,
+                "frame": 48,
+                "reason": "Exact scene continuity boundary",
+                "state": {
+                  "position": "center",
+                  "hand": "raised"
+                },
+                "locks": {
+                  "setting": "",
+                  "character_lock": "a person in a red coat",
+                  "style_lock": "",
+                  "shot_type": "",
+                  "screen_direction": "",
+                  "palette": ""
+                },
+                "boundary": "start"
+              }
+            },
+            {
+              "id": "planner:0:b:anchor-end:4",
+              "owner": "studio_planner",
+              "source_id": "b",
+              "start_s": 4.0,
+              "end_s": 4.0,
+              "data": {
+                "id": "planner:0:b:anchor-end:4",
+                "owner": "studio_planner",
+                "source_id": "b",
+                "t": 4.0,
+                "frame": 96,
+                "reason": "Exact scene continuity boundary",
+                "state": {
+                  "position": "right"
+                },
+                "locks": {
+                  "setting": "",
+                  "character_lock": "a person in a red coat",
+                  "style_lock": "",
+                  "shot_type": "",
+                  "screen_direction": "",
+                  "palette": ""
+                },
+                "boundary": "end"
+              }
+            }
+          ]
+        },
+        {
+          "id": "planner:motion",
+          "name": "Planner motion",
+          "owner": "studio_planner",
+          "type": "motion",
+          "schedule_revision": "c69b28b138a19084387ef2ab",
+          "clips": [
+            {
+              "id": "planner:motion:envelope",
+              "owner": "studio_planner",
+              "start_s": 0,
+              "end_s": 4.0,
+              "data": {
+                "strength_schedule": "0:(0.2844), 48:(0.2999), 48:(0.3068), 96:(0.3099)",
+                "cfg_scale_schedule": "0:(6.0), 48:(6.0), 48:(6.0), 96:(6.0)",
+                "steps_schedule": "0:(15), 48:(15), 48:(15), 96:(15)",
+                "keyframes": [
+                  {
+                    "id": "planner:0:a:motion:0",
+                    "owner": "studio_planner",
+                    "source_id": "a",
+                    "t": 0.0,
+                    "frame": 0,
+                    "reason": "Scene boundary",
+                    "motion_score": 0.1375,
+                    "strength": 0.2844,
+                    "anchor_strength": 0.15,
+                    "cfg": 6.0,
+                    "steps": 15,
+                    "subject_motion": 0.1375,
+                    "environment_motion": 0.0344
+                  },
+                  {
+                    "id": "planner:0:a:motion:2",
+                    "owner": "studio_planner",
+                    "source_id": "a",
+                    "t": 2.0,
+                    "frame": 48,
+                    "reason": "Scene boundary",
+                    "motion_score": 0.1994,
+                    "strength": 0.2999,
+                    "anchor_strength": 0.15,
+                    "cfg": 6.0,
+                    "steps": 15,
+                    "subject_motion": 0.1994,
+                    "environment_motion": 0.0498
+                  },
+                  {
+                    "id": "planner:0:b:motion:2",
+                    "owner": "studio_planner",
+                    "source_id": "b",
+                    "t": 2.0,
+                    "frame": 48,
+                    "reason": "Scene boundary",
+                    "motion_score": 0.2272,
+                    "strength": 0.3068,
+                    "anchor_strength": 0.15,
+                    "cfg": 6.0,
+                    "steps": 15,
+                    "subject_motion": 0.2272,
+                    "environment_motion": 0.0568
+                  },
+                  {
+                    "id": "planner:0:b:motion:4",
+                    "owner": "studio_planner",
+                    "source_id": "b",
+                    "t": 4.0,
+                    "frame": 96,
+                    "reason": "Scene boundary",
+                    "motion_score": 0.2397,
+                    "strength": 0.3099,
+                    "anchor_strength": 0.15,
+                    "cfg": 6.0,
+                    "steps": 15,
+                    "subject_motion": 0.2397,
+                    "environment_motion": 0.0599
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "camera": {
+        "keyframes": [
+          {
+            "id": "planner:0:a:camera:0",
+            "owner": "studio_planner",
+            "source_id": "a",
+            "t": 0.0,
+            "frame": 0,
+            "reason": "Scene boundary",
+            "zoom": 1.00344,
+            "pan_x": 0.0,
+            "pan_y": 0.0,
+            "rotation_deg": 0.0,
+            "intent": ""
+          },
+          {
+            "id": "planner:0:a:camera:2",
+            "owner": "studio_planner",
+            "source_id": "a",
+            "t": 2.0,
+            "frame": 48,
+            "reason": "Scene boundary",
+            "zoom": 1.00499,
+            "pan_x": 0.0,
+            "pan_y": 0.0,
+            "rotation_deg": 0.0,
+            "intent": ""
+          },
+          {
+            "id": "planner:0:b:camera:2",
+            "owner": "studio_planner",
+            "source_id": "b",
+            "t": 2.0,
+            "frame": 48,
+            "reason": "Scene boundary",
+            "zoom": 1.00568,
+            "pan_x": 0.0,
+            "pan_y": 0.0,
+            "rotation_deg": 0.0,
+            "intent": ""
+          },
+          {
+            "id": "planner:0:b:camera:4",
+            "owner": "studio_planner",
+            "source_id": "b",
+            "t": 4.0,
+            "frame": 96,
+            "reason": "Scene boundary",
+            "zoom": 1.00599,
+            "pan_x": 0.0,
+            "pan_y": 0.0,
+            "rotation_deg": 0.0,
+            "intent": ""
+          }
+        ]
+      },
+      "markers": [
+        {
+          "id": "planner:0:a:scene:0",
+          "owner": "studio_planner",
+          "source_id": "a",
+          "t": 0.0,
+          "frame": 0,
+          "reason": "Scene boundary",
+          "label": "Scene 1"
+        },
+        {
+          "id": "planner:0:b:scene:2",
+          "owner": "studio_planner",
+          "source_id": "b",
+          "t": 2.0,
+          "frame": 48,
+          "reason": "Scene boundary",
+          "label": "Scene 2"
+        }
+      ],
+      "duration_s": 4.0,
+      "approved_schedule": {
+        "schedule_revision": "c69b28b138a19084387ef2ab",
+        "variant_index": 0,
+        "source_project_revision": 5,
+        "transport": {
+          "fps": 24,
+          "duration_s": 4.0,
+          "bpm": null
+        }
+      }
+    },
+    "notes": "new"
+  },
+  "schema_version": 3
+}

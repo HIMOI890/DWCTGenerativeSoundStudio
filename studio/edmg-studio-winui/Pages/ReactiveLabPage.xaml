@@ -46,27 +46,13 @@
                     Click="RefreshButton_Click"
                     Content="Refresh" />
                 <Button
-                    x:Name="ImportButton"
-                    VerticalAlignment="Bottom"
-                    AutomationProperties.AutomationId="ReactiveImportButton"
-                    AutomationProperties.Name="Import Reactive Lab document"
-                    Click="ImportButton_Click"
-                    Content="Import JSON" />
-                <Button
-                    x:Name="ExportButton"
-                    VerticalAlignment="Bottom"
-                    AutomationProperties.AutomationId="ReactiveExportButton"
-                    AutomationProperties.Name="Export Reactive Lab document"
-                    Click="ExportButton_Click"
-                    Content="Export JSON" />
-                <Button
                     x:Name="ApplyButton"
                     VerticalAlignment="Bottom"
                     AccessKey="A"
                     AutomationProperties.AutomationId="ReactiveApplyButton"
-                    AutomationProperties.Name="Apply Reactive Lab result to timeline"
+                    AutomationProperties.Name="Apply shared Workspace draft to timeline"
                     Click="ApplyButton_Click"
-                    Content="Apply to Timeline"
+                    Content="Apply Workspace draft"
                     Style="{StaticResource AccentButtonStyle}" />
                 <Button
                     x:Name="CancelButton"
@@ -99,12 +85,13 @@
 
         <Grid Grid.Row="2" ColumnSpacing="12">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="340" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
+            <Expander Grid.Column="0" VerticalAlignment="Top" Header="Advanced mappings" IsExpanded="False">
             <Border
-                Grid.Column="0"
+                Width="340"
                 Padding="16"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -228,6 +215,7 @@
                     </StackPanel>
                 </Grid>
             </Border>
+            </Expander>
 
             <TabView
                 x:Name="ReactiveTabView"
@@ -235,9 +223,54 @@
                 AutomationProperties.AutomationId="ReactiveTabView"
                 AutomationProperties.Name="Reactive Lab editors"
                 IsAddTabButtonVisible="False">
+                <TabViewItem Header="Workspace keyframes" IsClosable="False" AutomationProperties.AutomationId="Reactive.Workspace.Tab">
+                    <Grid Padding="12" RowSpacing="12">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock x:Name="WorkspaceDraftSummaryText" AutomationProperties.AutomationId="Reactive.Workspace.Summary"
+                                   Text="Loading the shared Workspace draft…" TextWrapping="Wrap" />
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="SaveWorkspaceDraftButton" Content="Save refinements" Click="SaveWorkspaceDraftButton_Click"
+                                    AutomationProperties.AutomationId="Reactive.Workspace.Save" />
+                            <Button x:Name="ReloadWorkspaceDraftButton" Content="Discard local edits and reload" Click="ReloadWorkspaceDraftButton_Click"
+                                    AutomationProperties.AutomationId="Reactive.Workspace.Reload" />
+                        </StackPanel>
+                        <ListView x:Name="KeyframesListView" Grid.Row="2" ItemsSource="{x:Bind Keyframes, Mode=OneWay}"
+                                  AutomationProperties.AutomationId="Reactive.Workspace.Keyframes"
+                                  SelectionMode="Single" SelectionChanged="KeyframesListView_SelectionChanged">
+                            <ListView.ItemTemplate>
+                                <DataTemplate x:DataType="core:ReactiveKeyframeEditor">
+                                    <StackPanel Padding="4" Spacing="2">
+                                        <TextBlock Text="{x:Bind Summary}" />
+                                        <TextBlock Text="{x:Bind Id}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                        <StackPanel x:Name="KeyframeEditorPanel" Grid.Row="3" Spacing="8">
+                            <TextBlock x:Name="SelectedKeyframeText" Text="Select a generated keyframe." TextWrapping="Wrap"
+                                       AutomationProperties.AutomationId="Reactive.Workspace.Placement" />
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                <NumberBox x:Name="KeyframeStrengthNumberBox" Header="Motion strength" Minimum="0" Maximum="1" SmallChange="0.05"
+                                           SpinButtonPlacementMode="Compact" ValueChanged="KeyframeValue_Changed"
+                                           AutomationProperties.AutomationId="Reactive.Workspace.Strength" />
+                                <NumberBox x:Name="KeyframeZoomNumberBox" Grid.Column="1" Header="Camera zoom" Minimum="0.001" Maximum="20" SmallChange="0.05"
+                                           SpinButtonPlacementMode="Compact" ValueChanged="KeyframeValue_Changed"
+                                           AutomationProperties.AutomationId="Reactive.Workspace.Zoom" />
+                            </Grid>
+                            <TextBlock Text="Timing follows the shared scene plan. Refine scene timing in AI Planner; reactive keyframes update automatically."
+                                       TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                    </Grid>
+                </TabViewItem>
                 <TabViewItem
                     AutomationProperties.Name="Mapping editor"
-                    Header="Mapping editor"
+                    Header="Advanced mapping editor"
                     IsClosable="False">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <StackPanel MaxWidth="900" Padding="4,8,20,20" Spacing="14">
@@ -564,7 +597,7 @@
 
                 <TabViewItem
                     AutomationProperties.Name="JSON and diagnostics"
-                    Header="JSON &amp; diagnostics"
+                    Header="Advanced JSON"
                     IsClosable="False">
                     <Grid Padding="8,12,20,20" RowSpacing="12">
                         <Grid.RowDefinitions>
@@ -588,6 +621,21 @@
                             TextWrapping="NoWrap"
                             ScrollViewer.VerticalScrollBarVisibility="Auto" />
                         <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                <Button
+                    x:Name="ImportButton"
+                    VerticalAlignment="Bottom"
+                    AutomationProperties.AutomationId="ReactiveImportButton"
+                    AutomationProperties.Name="Import Reactive Lab document"
+                    Click="ImportButton_Click"
+                    Content="Import JSON" />
+                <Button
+                    x:Name="ExportButton"
+                    VerticalAlignment="Bottom"
+                    AutomationProperties.AutomationId="ReactiveExportButton"
+                    AutomationProperties.Name="Export Reactive Lab document"
+                    Click="ExportButton_Click"
+                    Content="Export JSON" />
+
                             <Button
                                 AutomationProperties.AutomationId="ReactiveValidateJsonButton"
                                 AutomationProperties.Name="Validate raw JSON"

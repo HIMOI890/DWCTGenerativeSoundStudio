@@ -216,7 +216,7 @@ class InternalVideoRenderRequest(BaseModel):
     resume_existing_frames: bool = True
     motion_strategy: Literal["manual","storyboard_full_motion"] = "manual"
     storyboard_shot_max_s: float = Field(default=4.0, ge=1.0, le=12.0)
-    video_model_engine: Literal["auto","svd","animatediff"] = "auto"
+    video_model_engine: Literal["auto","svd","animatediff","hunyuan_video15"] = "auto"
     video_model_id: str | None = None
     video_model_max_frames_per_scene: int = Field(default=25, ge=2, le=96)
     video_model_motion_bucket_id: int = Field(default=127, ge=1, le=255)

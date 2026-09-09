@@ -1,6 +1,8 @@
 <Project>
-  <ItemGroup>
-    <Analyzer Include="C:\Users\lanak\.copilot\installed-plugins\awesome-copilot\winui\skills\winui-dev-workflow\analyzer\Microsoft.WindowsAppSDK.Analyzers.dll" />
+  <!-- Optional local tooling must not make a clean checkout depend on one user's profile. -->
+  <ItemGroup Condition="'$(EdmgWinUIAnalyzerDirectory)' != '' and Exists('$(EdmgWinUIAnalyzerDirectory)\Microsoft.WindowsAppSDK.Analyzers.dll')">
+    <Analyzer Include="$(EdmgWinUIAnalyzerDirectory)\Microsoft.WindowsAppSDK.Analyzers.dll" />
   </ItemGroup>
-  <Import Project="C:\Users\lanak\.copilot\installed-plugins\awesome-copilot\winui\skills\winui-dev-workflow\analyzer\Microsoft.WindowsAppSDK.Analyzers.targets" />
+  <Import Project="$(EdmgWinUIAnalyzerDirectory)\Microsoft.WindowsAppSDK.Analyzers.targets"
+          Condition="'$(EdmgWinUIAnalyzerDirectory)' != '' and Exists('$(EdmgWinUIAnalyzerDirectory)\Microsoft.WindowsAppSDK.Analyzers.targets')" />
 </Project>

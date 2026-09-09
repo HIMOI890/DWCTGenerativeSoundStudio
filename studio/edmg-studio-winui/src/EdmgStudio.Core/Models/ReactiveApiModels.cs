@@ -7,43 +7,43 @@ public sealed class ReactiveLabApplyRequest
 {
     [JsonPropertyName("metadata")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonElement? Metadata { get; init; }
+    public JsonElement? Metadata { get; set; }
 
     [JsonPropertyName("keyframes")]
-    public List<JsonElement> Keyframes { get; init; } = [];
+    public List<JsonElement> Keyframes { get; set; } = [];
 
     [JsonPropertyName("beat_markers")]
-    public List<JsonElement> BeatMarkers { get; init; } = [];
+    public List<JsonElement> BeatMarkers { get; set; } = [];
 
     [JsonPropertyName("cue_events")]
-    public List<JsonElement> CueEvents { get; init; } = [];
+    public List<JsonElement> CueEvents { get; set; } = [];
 
     [JsonPropertyName("sections")]
-    public List<JsonElement> Sections { get; init; } = [];
+    public List<JsonElement> Sections { get; set; } = [];
 
     [JsonPropertyName("repair_suggestions")]
-    public List<JsonElement> RepairSuggestions { get; init; } = [];
+    public List<JsonElement> RepairSuggestions { get; set; } = [];
 
     [JsonPropertyName("schedules")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonElement? Schedules { get; init; }
+    public JsonElement? Schedules { get; set; }
 
     [JsonPropertyName("handoff_manifest")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonElement? HandoffManifest { get; init; }
+    public JsonElement? HandoffManifest { get; set; }
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 
     [JsonPropertyName("overwrite_motion_track")]
-    public bool OverwriteMotionTrack { get; init; } = true;
+    public bool OverwriteMotionTrack { get; set; } = true;
 
     [JsonPropertyName("overwrite_camera")]
-    public bool OverwriteCamera { get; init; } = true;
+    public bool OverwriteCamera { get; set; } = true;
 
     [JsonPropertyName("expected_revision")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public long? ExpectedRevision { get; init; }
+    public long? ExpectedRevision { get; set; }
 }
 
 public sealed class ReactiveLabApplyResponse
@@ -121,35 +121,35 @@ public sealed record ReactiveMapping
 public sealed class ReactivePreset
 {
     [JsonPropertyName("name")]
-    public string Name { get; init; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
 
     [JsonPropertyName("mappings")]
-    public List<ReactiveMapping> Mappings { get; init; } = [];
+    public List<ReactiveMapping> Mappings { get; set; } = [];
 
     [JsonPropertyName("mapping_preset")]
-    public string MappingPreset { get; init; } = "cinematic";
+    public string MappingPreset { get; set; } = "cinematic";
 
     [JsonPropertyName("sensitivity")]
-    public double Sensitivity { get; init; } = 1;
+    public double Sensitivity { get; set; } = 1;
 
     [JsonPropertyName("smoothing")]
-    public double Smoothing { get; init; } = 0.82;
+    public double Smoothing { get; set; } = 0.82;
 
     [JsonPropertyName("fps")]
-    public int FramesPerSecond { get; init; } = 30;
+    public int FramesPerSecond { get; set; } = 30;
 
     [JsonPropertyName("min_cut_frames")]
-    public int MinimumCutFrames { get; init; } = 12;
+    public int MinimumCutFrames { get; set; } = 12;
 
     [JsonPropertyName("render_mode")]
-    public string RenderMode { get; init; } = "balanced";
+    public string RenderMode { get; set; } = "balanced";
 
     [JsonPropertyName("schedule_stride")]
-    public int ScheduleStride { get; init; } = 4;
+    public int ScheduleStride { get; set; } = 4;
 
     [JsonPropertyName("scaling")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public JsonElement? Scaling { get; init; }
+    public JsonElement? Scaling { get; set; }
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }
@@ -158,25 +158,34 @@ public sealed class ReactivePreset
 public sealed class ReactiveLabLocalState
 {
     [JsonPropertyName("current")]
-    public ReactivePreset Current { get; init; } = new();
+    public ReactivePreset Current { get; set; } = new();
 
     [JsonPropertyName("presets")]
-    public List<ReactivePreset> Presets { get; init; } = [];
+    public List<ReactivePreset> Presets { get; set; } = [];
+
+    [JsonPropertyName("workspace_draft_id")]
+    public string? WorkspaceDraftId { get; set; }
+
+    [JsonPropertyName("workspace_draft_revision")]
+    public long? WorkspaceDraftRevision { get; set; }
+
+    [JsonPropertyName("workspace_draft")]
+    public JsonElement? WorkspaceDraft { get; set; }
 }
 
 public sealed class ReactiveLabMetadata
 {
     [JsonPropertyName("source")]
-    public string Source { get; init; } = "winui";
+    public string Source { get; set; } = "winui";
 
     [JsonPropertyName("selected_variant_index")]
-    public int? SelectedVariantIndex { get; init; }
+    public int? SelectedVariantIndex { get; set; }
 
     [JsonPropertyName("mappings")]
-    public List<ReactiveMapping> Mappings { get; init; } = [];
+    public List<ReactiveMapping> Mappings { get; set; } = [];
 
     [JsonPropertyName("settings")]
-    public ReactivePreset Settings { get; init; } = new();
+    public ReactivePreset Settings { get; set; } = new();
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }

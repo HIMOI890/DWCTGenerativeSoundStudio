@@ -100,7 +100,7 @@ class InternalVideoSettings:
     deforum_overrides: dict[str, Any] | None = None
     # Internal video-model adapter. SVD is image-to-video from generated
     # keyframes; AnimateDiff is text-to-video through a Diffusers motion adapter.
-    video_model_engine: str = "auto"  # auto|svd|animatediff
+    video_model_engine: str = "auto"  # auto|svd|animatediff|hunyuan_video15
     video_model_id: str | None = None
     video_model_path: str | None = None
     video_model_max_frames_per_scene: int = 25
@@ -317,22 +317,40 @@ def _video_model_adapter_canvas(
     cpu_offload: bool,
 ) -> tuple[int, int, str | None]:
     engine_l = str(engine or "").lower()
-    if engine_l not in {"animatediff", "svd"} or str(device or "").lower() != "cuda":
+    if engine_l not in {"animatediff", "svd", "hunyuan_video15"} or str(device or "").lower() != "cuda":
         return int(width), int(height), None
     vram_gb = _cuda_total_vram_gb(device)
     if vram_gb <= 0.0:
         return int(width), int(height), None
     if vram_gb <= 6.5:
-        max_w, max_h = (576, 320) if engine_l == "svd" else (640, 384)
+        max_w, max_h = {
+            "svd": (576, 320),
+            "animatediff": (640, 384),
+            # Hunyuan is much larger than the legacy adapters. These bounds
+            # are conservative execution targets, not a release-support claim.
+            "hunyuan_video15": (512, 288),
+        }[engine_l]
         adapter_w, adapter_h = _fit_multiple_of_8(int(width), int(height), max_width=max_w, max_height=max_h)
         if (adapter_w, adapter_h) != (int(width), int(height)):
-            label = "SVD" if engine_l == "svd" else "AnimateDiff"
+            label = {
+                "svd": "SVD",
+                "animatediff": "AnimateDiff",
+                "hunyuan_video15": "HunyuanVideo-1.5",
+            }[engine_l]
             return adapter_w, adapter_h, f"6 GB CUDA {label} canvas capped to {adapter_w}x{adapter_h}"
     elif vram_gb <= 8.5 and not bool(cpu_offload):
-        max_w, max_h = (640, 360) if engine_l == "svd" else (704, 448)
+        max_w, max_h = {
+            "svd": (640, 360),
+            "animatediff": (704, 448),
+            "hunyuan_video15": (576, 320),
+        }[engine_l]
         adapter_w, adapter_h = _fit_multiple_of_8(int(width), int(height), max_width=max_w, max_height=max_h)
         if (adapter_w, adapter_h) != (int(width), int(height)):
-            label = "SVD" if engine_l == "svd" else "AnimateDiff"
+            label = {
+                "svd": "SVD",
+                "animatediff": "AnimateDiff",
+                "hunyuan_video15": "HunyuanVideo-1.5",
+            }[engine_l]
             return adapter_w, adapter_h, f"8 GB CUDA {label} canvas capped to {adapter_w}x{adapter_h}"
     return int(width), int(height), None
 
@@ -2732,8 +2750,11 @@ def render_internal_video_variant(
         video_model_path = Path(raw_video_model_path)
         video_model_engine = str(settings.video_model_engine or "svd").strip().lower()
         if video_model_engine == "auto":
+            video_model_id_hint = str(settings.video_model_id or "").lower()
             video_model_engine = (
-                "animatediff" if "animatediff" in str(settings.video_model_id or "").lower() else "svd"
+                "hunyuan_video15"
+                if "hunyuan" in video_model_id_hint
+                else ("animatediff" if "animatediff" in video_model_id_hint else "svd")
             )
         validate_video_model_layout(video_model_engine, video_model_path)
         if video_model_engine == "animatediff" and _model_family_from_dir(model_dir) != "sd15":
@@ -4843,7 +4864,12 @@ def describe_internal_video_model_preflight(
     hw = hardware or {}
     engine = str(settings.video_model_engine or "svd").strip().lower()
     if engine == "auto":
-        engine = "animatediff" if "animatediff" in str(settings.video_model_id or "").lower() else "svd"
+        model_id_hint = str(settings.video_model_id or "").lower()
+        engine = (
+            "hunyuan_video15"
+            if "hunyuan" in model_id_hint
+            else ("animatediff" if "animatediff" in model_id_hint else "svd")
+        )
     mode = _normalize_video_motion_score_mode(settings.video_model_motion_score_mode)
     anchor_mode = _normalize_video_anchor_mode(settings.video_model_anchor_mode)
     keyframe_renderer = normalize_video_model_keyframe_renderer(settings.video_model_keyframe_renderer)
@@ -4867,6 +4893,19 @@ def describe_internal_video_model_preflight(
             effective_native_cap = min(effective_native_cap, 12)
         elif backend == "cuda" and vram_gb and vram_gb <= 8.5 and not bool(settings.video_model_cpu_offload):
             effective_native_cap = min(effective_native_cap, 16)
+    elif engine == "hunyuan_video15":
+        # Hunyuan's native context is intentionally conservative until the
+        # project qualifies a concrete local checkpoint/profile. These caps
+        # describe the adapter contract and do not certify hardware support.
+        effective_native_cap = min(effective_native_cap, 61)
+        if backend == "cuda" and vram_gb and vram_gb <= 6.5:
+            effective_native_cap = min(effective_native_cap, 8)
+        elif backend == "cuda" and vram_gb and vram_gb <= 8.5:
+            effective_native_cap = min(effective_native_cap, 12)
+        warnings.append(
+            "HunyuanVideo-1.5 local execution remains discovery-only until its adapter, low-VRAM profile, and fresh temporal output evidence are qualified."
+        )
+        checks.append({"name": "adapter_qualification", "status": "blocked"})
 
     motion_frame_budgets: list[dict[str, Any]] = []
     planned_windows = _storyboard_scene_windows(
@@ -4952,6 +4991,9 @@ def describe_internal_video_model_preflight(
     elif engine == "animatediff" and int(settings.video_model_max_frames_per_scene or 25) > 32:
         warnings.append("AnimateDiff works best with shorter context windows; consider 16-32 generated frames per scene before scaling up.")
         checks.append({"name": "frame_count", "status": "warn", "recommended_max": 32})
+    elif engine == "hunyuan_video15" and int(settings.video_model_max_frames_per_scene or 25) > 61:
+        warnings.append("HunyuanVideo-1.5 uses a bounded temporal window; Studio will cap the adapter request to 61 frames.")
+        checks.append({"name": "frame_count", "status": "warn", "cap": 61})
     else:
         checks.append({"name": "frame_count", "status": "ok"})
 
@@ -4962,8 +5004,15 @@ def describe_internal_video_model_preflight(
     else:
         checks.append({"name": "dtype", "status": "ok"})
 
-    if backend == "cuda" and engine == "animatediff" and vram_gb and vram_gb <= 8.5 and not bool(settings.video_model_cpu_offload):
-        warnings.append("AnimateDiff on low-VRAM CUDA should use CPU offload before rendering.")
+    if (
+        backend == "cuda"
+        and engine in {"animatediff", "hunyuan_video15"}
+        and vram_gb
+        and vram_gb <= 8.5
+        and not bool(settings.video_model_cpu_offload)
+    ):
+        label = "HunyuanVideo-1.5" if engine == "hunyuan_video15" else "AnimateDiff"
+        warnings.append(f"{label} on low-VRAM CUDA should use CPU offload before rendering.")
         checks.append({"name": "offload", "status": "warn"})
     else:
         checks.append({"name": "offload", "status": "ok"})

@@ -8,6 +8,7 @@ import {
   type SignedProjectMediaRequest,
 } from "../components/api";
 import { CreativeDirectionPanel } from "../components/CreativeDirectionPanel";
+import DirectorWorkspacePanel from "../components/DirectorWorkspacePanel";
 import {
   ProjectRevisionConflictNotice,
   expectedRevisionBody,
@@ -27,7 +28,7 @@ import type { PageProps } from "../types/pageProps";
 import AiNlpWorkbench from "../workbenches/AiNlpWorkbench";
 import AudioReactiveWorkbench from "../workbenches/AudioReactiveWorkbench";
 
-type WorkspaceView = "overview" | "planner" | "reactive" | "storyboard";
+type WorkspaceView = "overview" | "director" | "planner" | "reactive" | "storyboard";
 type OverviewSectionId = "project" | "audio" | "references" | "plan" | "handoff";
 
 const WORKSPACE_MIN_ZOOM = 4;
@@ -805,6 +806,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
 
   const workflowTabs: Array<{ id: WorkspaceView; label: string; meta: string }> = [
     { id: "overview", label: "Overview", meta: `${variantCount || 0} variants` },
+    { id: "director", label: "Director", meta: storyboardReady ? "story + renderer intent" : "select a storyboard first" },
     { id: "planner", label: "AI Planner", meta: analysisReady ? "optional story pass" : "analyze first" },
     { id: "reactive", label: "Reactive Lab", meta: analysisReady ? "optional motion pass" : "analyze first" },
     { id: "storyboard", label: "Storyboard", meta: storyboardReady ? `${variantScenes.length} scenes` : "sync or plan first" },
@@ -975,7 +977,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
 
       <details className="card workspace-guideCard">
         <summary className="workspace-guideSummary">
-          {uiMode === "advanced" ? "Advanced guide and workflow notes" : workspaceView === "overview" ? "Quick guide and capabilities" : workspaceView === "planner" ? "Planner guide and capabilities" : workspaceView === "storyboard" ? "Storyboard guide and capabilities" : "Reactive guide and capabilities"}
+          {uiMode === "advanced" ? "Advanced guide and workflow notes" : workspaceView === "overview" ? "Quick guide and capabilities" : workspaceView === "director" ? "Director guide and capabilities" : workspaceView === "planner" ? "Planner guide and capabilities" : workspaceView === "storyboard" ? "Storyboard guide and capabilities" : "Reactive guide and capabilities"}
         </summary>
         <div className="workspace-guideBody">
           {workspaceView === "overview" ? (
@@ -988,15 +990,15 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
                 <div className="guide-kicker">Recommended flow</div>
                 <ul className="guide-list">
                   <li>Choose the project, pick the track, and use `Analyze + Transcribe`. If a local file is selected, Workspace uploads it first and saves that result into the shared Studio session.</li>
-                  <li>Stay in Overview if the base creative direction is already good enough and you do not need a separate story or motion pass.</li>
+                  <li>Stay in Overview if the base creative direction is already good enough and you do not need a separate story, Director, or motion pass.</li>
                   <li>Fast path: go straight from Overview into Reactive Lab when the base story already works and you only need camera or motion scheduling.</li>
-                  <li>Deep path: go from Overview into AI Planner when you want richer scene writing or more variety, sync that back, then use Reactive Lab to add schedules on top of the refined story pass.</li>
+                  <li>Deep path: go from Overview into AI Planner when you want richer scene writing or more variety, sync that back, use Director to save the Story Bible and renderer intent, then use Reactive Lab to add schedules on top of the refined story pass.</li>
                 </ul>
               </section>
               <section className="guide-block">
                 <div className="guide-kicker">What carries forward</div>
                 <ul className="guide-list">
-                  <li>Audio file, transcript, energy sections, tags, and saved storyboard variant are shared with Planner and Reactive Lab automatically.</li>
+                  <li>Audio file, transcript, energy sections, tags, saved storyboard variant, and the persistent Director document are shared with Planner and Reactive Lab automatically.</li>
                   <li>Timeline Preview lets you verify full-track pacing before going into dense editing.</li>
                   <li>Storyboard keeps the saved scene order visible even if you never open the full standalone labs.</li>
                 </ul>
@@ -1023,6 +1025,29 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
                   </ul>
                 </section>
               ) : null}
+            </div>
+          ) : workspaceView === "director" ? (
+            <div className="guide-grid">
+              <section className="guide-block">
+                <div className="guide-kicker">What this view does</div>
+                <p>Director is the shared creative control pass inside Workspace. It turns the current analysis and selected storyboard into a persistent Story Bible and SceneSpec document that every Studio client can consume.</p>
+              </section>
+              <section className="guide-block">
+                <div className="guide-kicker">Recommended flow</div>
+                <ul className="guide-list">
+                  <li>Run analysis, generate or select a storyboard, then use <b>Use selected storyboard</b> to stage those scenes in Director.</li>
+                  <li>Save the direction before preparing prompts or generating a draft so the request is tied to one project revision.</li>
+                  <li>Review a completed draft in this same Workspace and apply it only after checking the Story Bible and scene constraints.</li>
+                </ul>
+              </section>
+              <section className="guide-block">
+                <div className="guide-kicker">What carries forward</div>
+                <ul className="guide-list">
+                  <li>Saved direction is project data, not a page-local draft. Timeline, Render, Queue, WinUI, and Electron read the same revision.</li>
+                  <li>Prompt preparation is renderer-specific but deterministic; it does not submit a chargeable provider job.</li>
+                  <li>Generation remains in the background worker and returns a reviewable draft before any project direction changes.</li>
+                </ul>
+              </section>
             </div>
           ) : workspaceView === "planner" ? (
             <div className="guide-grid">
@@ -1266,6 +1291,9 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
                 <button className="secondary" onClick={() => setWorkspaceView("planner")} disabled={!projectId}>
                   Open AI Planner
                 </button>
+                <button className="secondary" onClick={() => setWorkspaceView("director")} disabled={!projectId}>
+                  Open Director
+                </button>
                 <button className="secondary" onClick={() => setWorkspaceView("reactive")} disabled={!projectId || !analysisReady}>
                   Open Reactive Lab
                 </button>
@@ -1299,6 +1327,7 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
             </div>
             <div className="row workspace-actionRow" style={{ gap: 10, flexWrap: "wrap" }}>
               <button className="secondary" onClick={() => setWorkspaceView("planner")} disabled={!projectId}>Planner</button>
+              <button className="secondary" onClick={() => setWorkspaceView("director")} disabled={!projectId}>Director</button>
               <button className="secondary" onClick={() => setWorkspaceView("reactive")} disabled={!projectId || !analysisReady}>Reactive Lab</button>
               <button onClick={() => onNavigate?.("render")} disabled={!plan?.variants?.length}>Go to Render</button>
               <button className="secondary" onClick={() => setWorkspaceView("storyboard")} disabled={!storyboardReady}>Open Storyboard</button>
@@ -1379,6 +1408,22 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
         </div>
       </div> : null}
 
+      {workspaceView === "director" ? (
+        <div className="workspace-panel card workspace-workbenchCard">
+          <DirectorWorkspacePanel
+            backendUrl={backendUrl}
+            projectId={projectId}
+            project={project}
+            analysis={analysis}
+            plan={plan}
+            selectedVariant={selectedVariant}
+            onRefreshProject={refreshProject}
+            onNavigate={onNavigate}
+            onMutationError={reportMutationError}
+          />
+        </div>
+      ) : null}
+
       {workspaceView === "planner" ? (
         <div className="workspace-panel card workspace-workbenchCard">
           <div className="workspace-panelHeader">
@@ -1391,6 +1436,9 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
             <div className="workspace-panelActions">
               <button className="secondary" onClick={() => setWorkspaceView("overview")}>
                 Back to overview
+              </button>
+              <button className="secondary" onClick={() => setWorkspaceView("director")} disabled={!projectId}>
+                Director
               </button>
               <button className="secondary" onClick={() => onNavigate?.("directorLab")} disabled={!projectId}>
                 Open EDMG Director
@@ -1426,6 +1474,9 @@ export default function Workspace({ onNavigate, backendUrl: backendUrlProp }: Pa
             <div className="workspace-panelActions">
               <button className="secondary" onClick={() => setWorkspaceView("overview")}>
                 Back to overview
+              </button>
+              <button className="secondary" onClick={() => setWorkspaceView("director")} disabled={!projectId}>
+                Director
               </button>
               <button className="secondary" onClick={() => onNavigate?.("directorLab")} disabled={!projectId}>
                 Open EDMG Director

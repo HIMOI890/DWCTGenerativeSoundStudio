@@ -9,10 +9,12 @@ using Windows.Storage.Pickers;
 
 namespace EdmgStudio.WinUI.Pages;
 
-public sealed partial class ReactiveLabPage : Page
+public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
 {
     private static readonly StudioJsonContext _indentedJsonContext =
         new(new JsonSerializerOptions { WriteIndented = true });
+    private static readonly SemaphoreSlim _localStateWriteLock = new(1, 1);
+    private readonly ObservableCollection<ReactiveKeyframeEditor> _keyframes = [];
     private readonly ObservableCollection<ReactiveMapping> _mappings = [];
     private readonly string[] _mappingPresets = ["cinematic", "psychedelic", "ambient", "percussive"];
     private readonly ObservableCollection<string> _presetNames = [];
@@ -32,8 +34,17 @@ public sealed partial class ReactiveLabPage : Page
     private bool _isSynchronizingProject;
     private bool _isLoadingPreset;
     private bool _isSessionSubscribed;
+    private bool _pageLoaded;
+    private bool _isOperationBusy;
+    private bool _isUpdatingKeyframe;
+    private bool _keyframesDirty;
+    private string? _workflowDraftId;
+    private string _workflowStatus = "not_prepared";
+    private long _workflowRevision;
+    private PlanDto? _workflowPlan;
 
     public ObservableCollection<ReactiveMapping> Mappings => _mappings;
+    public ObservableCollection<ReactiveKeyframeEditor> Keyframes => _keyframes;
 
     public ReactiveLabPage()
     {
@@ -71,17 +82,32 @@ public sealed partial class ReactiveLabPage : Page
 
     private async void ReactiveLabPage_Loaded(object sender, RoutedEventArgs e)
     {
+        _pageLoaded = true;
         if (!_isSessionSubscribed)
         {
             App.Services.Session.Changed += Session_Changed;
             _isSessionSubscribed = true;
         }
 
-        await RunOperationAsync("Loading Reactive Lab", LoadProjectsAndContextAsync);
+        await RefreshAsync();
+    }
+
+    public Task RefreshAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_pageLoaded || _isOperationBusy || cancellationToken.IsCancellationRequested)
+            return Task.CompletedTask;
+        if (_keyframesDirty)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements, or discard them and reload the Workspace draft.");
+            return Task.CompletedTask;
+        }
+        return RunOperationAsync("Refreshing Reactive Lab", LoadProjectsAndContextAsync,
+            externalCancellationToken: cancellationToken);
     }
 
     private void ReactiveLabPage_Unloaded(object sender, RoutedEventArgs e)
     {
+        _pageLoaded = false;
         _operationCancellation?.Cancel();
         if (_isSessionSubscribed)
         {
@@ -103,6 +129,11 @@ public sealed partial class ReactiveLabPage : Page
         ProjectRevisionConflictException conflict,
         CancellationToken cancellationToken)
     {
+        if (_keyframesDirty)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Workspace changed", "Your unsaved keyframe refinements are retained. Export them for reference, or discard and reload the latest Workspace draft before retrying.");
+            return;
+        }
         if (!await StudioPageHelpers.ConfirmReloadAfterRevisionConflictAsync(XamlRoot, conflict))
         {
             ShowStatus(
@@ -139,7 +170,7 @@ public sealed partial class ReactiveLabPage : Page
 
     private async void Session_Changed(object? sender, EventArgs e)
     {
-        if (_isSynchronizingProject)
+        if (_isSynchronizingProject || _isOperationBusy)
         {
             return;
         }
@@ -147,6 +178,11 @@ public sealed partial class ReactiveLabPage : Page
         var sessionProjectId = App.Services.Session.ActiveProjectId;
         if (!string.Equals(sessionProjectId, _activeProjectId, StringComparison.Ordinal))
         {
+            if (_keyframesDirty)
+            {
+                ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements before switching projects.");
+                return;
+            }
             _activeProjectId = sessionProjectId;
             SelectProject(_activeProjectId);
             await RunOperationAsync("Synchronizing project", RefreshContextAsync);
@@ -175,6 +211,11 @@ public sealed partial class ReactiveLabPage : Page
 
     private async Task RefreshContextAsync(CancellationToken cancellationToken)
     {
+        if (_keyframesDirty)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements, or discard them and reload the Workspace draft.");
+            return;
+        }
         if (string.IsNullOrWhiteSpace(_activeProjectId))
         {
             ClearContext();
@@ -182,14 +223,18 @@ public sealed partial class ReactiveLabPage : Page
             return;
         }
 
-        var projectTask = App.Services.ApiClient.GetProjectAsync(_activeProjectId, cancellationToken);
-        var graphTask = App.Services.ApiClient.GetProjectMusicGraphAsync(_activeProjectId, cancellationToken);
-        var cueTask = App.Services.ApiClient.GetProjectLiveCuesAsync(_activeProjectId, cancellationToken);
-        var assetTask = App.Services.ApiClient.GetProjectLiveAssetsAsync(_activeProjectId, cancellationToken);
-        var timelineTask = App.Services.ApiClient.GetTimelineAsync(_activeProjectId, cancellationToken);
-        var localStateTask = LoadLocalStateAsync(_activeProjectId);
+        var projectId = _activeProjectId;
+        var projectTask = App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        var graphTask = App.Services.ApiClient.GetProjectMusicGraphAsync(projectId, cancellationToken);
+        var cueTask = App.Services.ApiClient.GetProjectLiveCuesAsync(projectId, cancellationToken);
+        var assetTask = App.Services.ApiClient.GetProjectLiveAssetsAsync(projectId, cancellationToken);
+        var timelineTask = App.Services.ApiClient.GetTimelineAsync(projectId, cancellationToken);
+        var workflowTask = App.Services.ApiClient.GetDirectorWorkflowAsync(projectId, cancellationToken);
+        var localStateTask = LoadLocalStateAsync(projectId);
 
-        await Task.WhenAll(projectTask, graphTask, cueTask, assetTask, timelineTask, localStateTask);
+        await Task.WhenAll(projectTask, graphTask, cueTask, assetTask, timelineTask, workflowTask, localStateTask);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_pageLoaded || projectId != _activeProjectId || _keyframesDirty) return;
 
         var project = await projectTask;
         var graph = await graphTask;
@@ -197,6 +242,7 @@ public sealed partial class ReactiveLabPage : Page
         var assets = await assetTask;
         var timeline = await timelineTask;
         var localState = await localStateTask;
+        var workflow = await workflowTask;
 
         _project = project.Project;
         _musicGraph = graph;
@@ -204,7 +250,27 @@ public sealed partial class ReactiveLabPage : Page
         _liveAssets = assets;
         _timeline = timeline;
         LoadBackendDraft(project.Project);
-        LoadLocalState(localState);
+        LoadWorkflow(workflow);
+        // Saved presets remain available, but cannot replace generated Workspace data.
+        LoadLocalState(_workflowDraftId is null ? localState : null);
+        if (_workflowDraftId is not null && localState is not null)
+        {
+            _savedPresets.AddRange(localState.Presets);
+            UpdatePresetNames();
+            if (localState.WorkspaceDraft is { ValueKind: JsonValueKind.Object } recovered)
+            {
+                bool matches = localState.WorkspaceDraftId == _workflowDraftId;
+                _draftRequest = ParseRequest(recovered.GetRawText());
+                _workflowDraftId = localState.WorkspaceDraftId;
+                _workflowRevision = localState.WorkspaceDraftRevision ?? _workflowRevision;
+                if (!matches) _workflowStatus = "stale";
+                _keyframesDirty = true;
+                PresentKeyframes();
+                WorkspaceDraftSummaryText.Text = matches
+                    ? "Recovered your unsaved keyframe refinements. Save or apply the shared Workspace draft when ready."
+                    : "Recovered your unsaved refinements from an older Workspace draft. Export them for reference, or discard and reload the current draft.";
+            }
+        }
         _selectedVariantIndex = App.Services.Session.SelectedVariantIndex;
         UpdateContextSelectors();
 
@@ -218,6 +284,107 @@ public sealed partial class ReactiveLabPage : Page
         UpdatePlanSummary(project.Project);
         UpdateRawJson();
         UpdateDiagnostics();
+    }
+
+    private void LoadWorkflow(JsonElement workflow)
+    {
+        _workflowDraftId = null;
+        _workflowStatus = workflow.TryGetProperty("status", out var status) ? status.GetString() ?? "not_prepared" : "not_prepared";
+        _workflowRevision = workflow.TryGetProperty("revision", out var revision) ? revision.GetInt64() : _project?.Revision ?? 1;
+        _workflowPlan = workflow.TryGetProperty("plan", out var plan) && plan.ValueKind == JsonValueKind.Object
+            ? JsonSerializer.Deserialize(plan.GetRawText(), StudioJson.GetTypeInfo<PlanDto>()) : null;
+        if (workflow.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.Object
+            && draft.TryGetProperty("draft_id", out var draftId))
+        {
+            _workflowDraftId = draftId.GetString();
+            if (draft.TryGetProperty("variant_index", out var variantIndex)) _selectedVariantIndex = variantIndex.GetInt32();
+        }
+        if (workflow.TryGetProperty("reactive", out var reactive) && reactive.ValueKind == JsonValueKind.Object)
+            _draftRequest = ParseRequest(reactive.GetRawText());
+        _keyframesDirty = false;
+        PresentKeyframes();
+        WorkspaceDraftSummaryText.Text = _workflowStatus switch
+        {
+            "draft" => $"Automatically prepared by Workspace · {_keyframes.Count} keyframes · {_draftRequest.CueEvents.Count} cues · {_draftRequest.Sections.Count} sections. Review here or in Overview + Director; applying commits the shared scene and reactive draft together.",
+            "applied" => "The shared Workspace draft is applied. Analyze audio or refine the scene plan to prepare the next draft.",
+            "stale" => "The source changed. Return to Overview + Director to prepare a current draft before applying.",
+            _ => "Analyze audio in Overview + Director. The shared plan and reactive keyframes will appear here automatically."
+        };
+        SetKeyframeEditingEnabled(_workflowStatus == "draft");
+        SaveWorkspaceDraftButton.IsEnabled = _workflowStatus == "draft";
+    }
+
+    private void PresentKeyframes()
+    {
+        _keyframes.Clear();
+        foreach (var keyframe in _draftRequest.Keyframes)
+            _keyframes.Add(new ReactiveKeyframeEditor(keyframe));
+        KeyframesListView.SelectedIndex = _keyframes.Count > 0 ? 0 : -1;
+    }
+
+    private void KeyframesListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        _isUpdatingKeyframe = true;
+        try
+        {
+            var item = KeyframesListView.SelectedItem as ReactiveKeyframeEditor;
+            SelectedKeyframeText.Text = item is null ? "Select a generated keyframe." : $"{item.Id}\n{item.Placement}";
+            KeyframeStrengthNumberBox.IsEnabled = item?.IsEditable == true && _workflowStatus == "draft";
+            KeyframeZoomNumberBox.IsEnabled = KeyframeStrengthNumberBox.IsEnabled;
+            KeyframeStrengthNumberBox.Value = item?.Strength ?? 0.5;
+            KeyframeZoomNumberBox.Value = item?.Zoom ?? 1;
+        }
+        finally { _isUpdatingKeyframe = false; }
+    }
+
+    private async void KeyframeValue_Changed(NumberBox sender, NumberBoxValueChangedEventArgs e)
+    {
+        if (_isUpdatingKeyframe || KeyframesListView.SelectedItem is not ReactiveKeyframeEditor item) return;
+        try
+        {
+            if (!item.Refine(KeyframeStrengthNumberBox.Value, KeyframeZoomNumberBox.Value)) return;
+            int index = KeyframesListView.SelectedIndex;
+            _keyframesDirty = true;
+            _draftRequest.Keyframes[index] = item.ToJson();
+            _keyframes[index] = new ReactiveKeyframeEditor(_draftRequest.Keyframes[index]);
+            KeyframesListView.SelectedIndex = index;
+            UpdateRawJson();
+            await SaveLocalStateAsync();
+        }
+        catch (Exception ex)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Keyframe refinement needs attention", StudioPageHelpers.GetErrorMessage(ex));
+        }
+    }
+
+    private async void SaveWorkspaceDraftButton_Click(object sender, RoutedEventArgs e) =>
+        await RunOperationAsync("Saving shared reactive draft", SaveWorkspaceDraftAsync);
+
+    private async Task SaveWorkspaceDraftAsync(CancellationToken cancellationToken)
+    {
+        if (_activeProjectId is not { Length: > 0 } projectId || _workflowDraftId is null || _workflowStatus != "draft")
+            throw new InvalidOperationException("A current Workspace draft is required. Analyze audio or prepare the draft in Overview + Director.");
+        if (!_keyframesDirty) return;
+        var request = new DirectorReactiveReviewRequest(_workflowRevision, _workflowDraftId,
+            JsonSerializer.SerializeToElement(_draftRequest, StudioJsonContext.Default.ReactiveLabApplyRequest));
+        var response = await App.Services.ApiClient.ReviewReactiveWorkflowAsync(projectId, request, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_pageLoaded || projectId != _activeProjectId) return;
+        LoadWorkflow(response);
+        UpdateRawJson();
+        await SaveLocalStateAsync();
+        await RefreshProjectRevisionAsync(projectId, cancellationToken);
+        ShowStatus(InfoBarSeverity.Success, "Shared draft saved", "Your reactive refinements are saved for the whole Workspace. The active Timeline is unchanged.");
+    }
+
+    private async void ReloadWorkspaceDraftButton_Click(object sender, RoutedEventArgs e)
+    {
+        await RunOperationAsync("Reloading Workspace draft", async cancellationToken =>
+        {
+            _keyframesDirty = false;
+            await SaveLocalStateAsync();
+            await RefreshContextAsync(cancellationToken);
+        });
     }
 
     private void LoadBackendDraft(ProjectDto project)
@@ -323,13 +490,20 @@ public sealed partial class ReactiveLabPage : Page
             return;
         }
 
+        if (_keyframesDirty)
+        {
+            SelectProject(_activeProjectId);
+            ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements before switching projects.");
+            return;
+        }
+
         _activeProjectId = project.Id;
         SynchronizeSessionProject(project.Id);
         await RunOperationAsync("Loading project context", RefreshContextAsync);
     }
 
     private async void RefreshButton_Click(object sender, RoutedEventArgs e) =>
-        await RunOperationAsync("Refreshing Reactive Lab", RefreshContextAsync, "Music, cue, asset, plan, and Timeline context refreshed.");
+        await RefreshAsync();
 
     private void CancelButton_Click(object sender, RoutedEventArgs e) =>
         _operationCancellation?.Cancel();
@@ -394,6 +568,24 @@ public sealed partial class ReactiveLabPage : Page
             return;
         }
 
+        if (_workflowDraftId is not null)
+        {
+            await RunOperationAsync("Applying shared Workspace draft", async cancellationToken =>
+            {
+                await SaveWorkspaceDraftAsync(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                var projectId = _activeProjectId!;
+                var response = await App.Services.ApiClient.ApplyDirectorWorkflowAsync(projectId,
+                    new DirectorWorkflowReviewRequest(_workflowRevision, _workflowDraftId!), cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!_pageLoaded || projectId != _activeProjectId) return;
+                LoadWorkflow(response);
+                await SaveLocalStateAsync();
+                await RefreshProjectRevisionAsync(projectId, cancellationToken);
+            }, "The shared scenes, camera, motion, and reactive keyframes are applied to Timeline together.");
+            return;
+        }
+
         if (!TryBuildRequest(out var request, out var errors))
         {
             ShowValidationErrors(errors);
@@ -405,7 +597,7 @@ public sealed partial class ReactiveLabPage : Page
             ShowStatus(
                 InfoBarSeverity.Warning,
                 "Analyzed results required",
-                "Mappings configure reactions but do not generate Timeline data by themselves. Import or load keyframes, cues, sections, schedules, or a handoff manifest first.");
+                "Analyze audio in Overview + Director to prepare reactive keyframes automatically. Advanced imports remain available for existing payloads.");
             return;
         }
 
@@ -670,6 +862,8 @@ public sealed partial class ReactiveLabPage : Page
     private void UseRawJson(string json)
     {
         _draftRequest = ParseRequest(json);
+        _keyframesDirty = _workflowDraftId is not null;
+        PresentKeyframes();
         var metadataMappings = ReadMappingsFromMetadata(_draftRequest.Metadata);
         if (metadataMappings.Count > 0)
         {
@@ -853,14 +1047,22 @@ public sealed partial class ReactiveLabPage : Page
         var state = new ReactiveLabLocalState
         {
             Current = _currentPreset,
-            Presets = _savedPresets.ToList()
+            Presets = _savedPresets.ToList(),
+            WorkspaceDraftId = _keyframesDirty ? _workflowDraftId : null,
+            WorkspaceDraftRevision = _keyframesDirty ? _workflowRevision : null,
+            WorkspaceDraft = _keyframesDirty
+                ? JsonSerializer.SerializeToElement(_draftRequest, StudioJsonContext.Default.ReactiveLabApplyRequest) : null,
         };
-        var file = await ApplicationData.Current.LocalFolder.CreateFileAsync(
-            LocalStateFileName(_activeProjectId),
-            CreationCollisionOption.ReplaceExisting);
-        await FileIO.WriteTextAsync(
-            file,
-            JsonSerializer.Serialize(state, StudioJsonContext.Default.ReactiveLabLocalState));
+        var projectId = _activeProjectId;
+        var json = JsonSerializer.Serialize(state, StudioJsonContext.Default.ReactiveLabLocalState);
+        await _localStateWriteLock.WaitAsync();
+        try
+        {
+            var file = await ApplicationData.Current.LocalFolder.CreateFileAsync(
+                LocalStateFileName(projectId), CreationCollisionOption.ReplaceExisting);
+            await FileIO.WriteTextAsync(file, json);
+        }
+        finally { _localStateWriteLock.Release(); }
     }
 
     private void UpdatePresetNames(string? selectedName = null)
@@ -885,6 +1087,11 @@ public sealed partial class ReactiveLabPage : Page
 
     private void UpdateRawJson()
     {
+        if (_workflowDraftId is not null)
+        {
+            RawJsonTextBox.Text = FormatJson(JsonSerializer.Serialize(_draftRequest, StudioJsonContext.Default.ReactiveLabApplyRequest));
+            return;
+        }
         _currentPreset = BuildCurrentPreset("Current");
         var request = new ReactiveLabApplyRequest
         {
@@ -921,6 +1128,12 @@ public sealed partial class ReactiveLabPage : Page
 
     private void UpdatePlanSummary(ProjectDto? project = null)
     {
+        if (_workflowPlan is { Variants.Count: > 0 } workspacePlan)
+        {
+            var selected = workspacePlan.Variants[Math.Clamp(_selectedVariantIndex, 0, workspacePlan.Variants.Count - 1)];
+            VariantSummaryTextBlock.Text = $"Shared Workspace draft: {selected.DisplayName} · {selected.SceneCount} scenes\n{selected.Logline}";
+            return;
+        }
         ProjectDto? selectedProject = project ?? _projects.FirstOrDefault(item => item.Id == _activeProjectId);
         if (selectedProject is null ||
             selectedProject.Meta.ValueKind != JsonValueKind.Object ||
@@ -971,6 +1184,12 @@ public sealed partial class ReactiveLabPage : Page
 
     private void ClearContext()
     {
+        _workflowDraftId = null;
+        _workflowPlan = null;
+        _workflowStatus = "not_prepared";
+        _keyframesDirty = false;
+        _keyframes.Clear();
+        _draftRequest = new();
         _project = null;
         _musicGraph = null;
         _liveCues = null;
@@ -991,28 +1210,37 @@ public sealed partial class ReactiveLabPage : Page
     private async Task RunOperationAsync(
         string title,
         Func<CancellationToken, Task> operation,
-        string? successMessage = null)
+        string? successMessage = null,
+        CancellationToken externalCancellationToken = default)
     {
+        if (!_pageLoaded || _isOperationBusy) return;
         _operationCancellation?.Cancel();
-        _operationCancellation?.Dispose();
-        _operationCancellation = new CancellationTokenSource();
+        using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken);
+        _operationCancellation = operationCancellation;
         SetBusy(true);
         ShowStatus(InfoBarSeverity.Informational, title, "Working…");
         try
         {
-            await operation(_operationCancellation.Token);
+            await operation(operationCancellation.Token);
+            operationCancellation.Token.ThrowIfCancellationRequested();
+            if (!_pageLoaded || !ReferenceEquals(_operationCancellation, operationCancellation)) return;
             if (!string.IsNullOrWhiteSpace(successMessage))
             {
                 ShowStatus(InfoBarSeverity.Success, "Reactive Lab updated", successMessage);
             }
+            else if (StatusInfoBar.Title == title && StatusInfoBar.Message == "Working…")
+            {
+                ShowStatus(InfoBarSeverity.Success, "Reactive Lab ready", "The shared Workspace context is up to date.");
+            }
         }
-        catch (OperationCanceledException) when (_operationCancellation.IsCancellationRequested)
+        catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
         {
             ShowStatus(InfoBarSeverity.Warning, "Operation canceled", "No additional Reactive Lab changes were requested.");
         }
         catch (ProjectRevisionConflictException conflict)
         {
-            await HandleProjectRevisionConflictAsync(conflict, _operationCancellation.Token);
+            if (_pageLoaded && !operationCancellation.IsCancellationRequested)
+                await HandleProjectRevisionConflictAsync(conflict, operationCancellation.Token);
         }
         catch (StudioApiException ex)
         {
@@ -1030,19 +1258,40 @@ public sealed partial class ReactiveLabPage : Page
         {
             ShowStatus(InfoBarSeverity.Error, $"{title} failed", ex.Message);
         }
+        catch (Exception ex)
+        {
+            ShowStatus(InfoBarSeverity.Error, $"{title} failed", StudioPageHelpers.GetErrorMessage(ex));
+        }
         finally
         {
-            SetBusy(false);
+            if (ReferenceEquals(_operationCancellation, operationCancellation))
+            {
+                _operationCancellation = null;
+                _isOperationBusy = false;
+                if (_pageLoaded) SetBusy(false);
+            }
         }
     }
 
     private void SetBusy(bool isBusy)
     {
+        _isOperationBusy = isBusy;
         OperationProgressBar.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
         CancelButton.IsEnabled = isBusy;
         RefreshButton.IsEnabled = !isBusy;
-        ApplyButton.IsEnabled = !isBusy;
+        ApplyButton.IsEnabled = !isBusy && (_workflowDraftId is null || _workflowStatus == "draft");
+        SaveWorkspaceDraftButton.IsEnabled = !isBusy && _workflowStatus == "draft";
+        ReloadWorkspaceDraftButton.IsEnabled = !isBusy;
+        SetKeyframeEditingEnabled(!isBusy && _workflowStatus == "draft");
         ProjectComboBox.IsEnabled = !isBusy;
+    }
+
+    private void SetKeyframeEditingEnabled(bool enabled)
+    {
+        bool editable = enabled && KeyframesListView.SelectedItem is ReactiveKeyframeEditor { IsEditable: true };
+        KeyframeStrengthNumberBox.IsEnabled = editable;
+        KeyframeZoomNumberBox.IsEnabled = editable;
+        KeyframesListView.IsEnabled = !_isUpdatingKeyframe;
     }
 
     private void ShowStatus(InfoBarSeverity severity, string title, string message)

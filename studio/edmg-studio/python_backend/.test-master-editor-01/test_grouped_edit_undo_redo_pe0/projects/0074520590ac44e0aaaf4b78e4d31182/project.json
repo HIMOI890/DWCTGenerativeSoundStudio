@@ -1,0 +1,147 @@
+{
+  "id": "0074520590ac44e0aaaf4b78e4d31182",
+  "name": "Editor",
+  "created_at": "2026-09-07 23:32:05",
+  "updated_at": "2026-09-07 23:32:05",
+  "revision": 5,
+  "meta": {
+    "timeline": {
+      "fps": 30,
+      "extension": {
+        "keep": true
+      },
+      "tracks": [
+        {
+          "id": "video",
+          "type": "video",
+          "clips": [
+            {
+              "id": "clip",
+              "start_s": 2.0,
+              "end_s": 3.0,
+              "data": {
+                "source_in_s": 2,
+                "source_sample_rate": 44100,
+                "speed": 2
+              },
+              "custom": "retained",
+              "start_sample": "96000",
+              "end_sample": "144000"
+            },
+            {
+              "id": "right",
+              "start_s": 3.0,
+              "end_s": 6.0,
+              "data": {
+                "source_in_s": 4.0,
+                "source_sample_rate": 44100,
+                "speed": 2,
+                "source_offset_sample": "176400"
+              },
+              "custom": "retained",
+              "start_sample": "144000",
+              "end_sample": "288000"
+            }
+          ]
+        }
+      ],
+      "timebase": {
+        "sample_rate": 48000,
+        "frame_rate": {
+          "numerator": 30,
+          "denominator": 1
+        }
+      },
+      "editor_version": 1
+    },
+    "editor_history": {
+      "undo": [
+        {
+          "label": "Timeline edit",
+          "before": {
+            "fps": 30,
+            "extension": {
+              "keep": true
+            },
+            "tracks": [
+              {
+                "id": "video",
+                "type": "video",
+                "clips": [
+                  {
+                    "id": "clip",
+                    "start_s": 1,
+                    "end_s": 5,
+                    "data": {
+                      "source_in_s": 2,
+                      "source_sample_rate": 44100,
+                      "speed": 2
+                    },
+                    "custom": "retained"
+                  }
+                ]
+              }
+            ]
+          },
+          "after": {
+            "fps": 30,
+            "extension": {
+              "keep": true
+            },
+            "tracks": [
+              {
+                "id": "video",
+                "type": "video",
+                "clips": [
+                  {
+                    "id": "clip",
+                    "start_s": 2.0,
+                    "end_s": 3.0,
+                    "data": {
+                      "source_in_s": 2,
+                      "source_sample_rate": 44100,
+                      "speed": 2
+                    },
+                    "custom": "retained",
+                    "start_sample": "96000",
+                    "end_sample": "144000"
+                  },
+                  {
+                    "id": "right",
+                    "start_s": 3.0,
+                    "end_s": 6.0,
+                    "data": {
+                      "source_in_s": 4.0,
+                      "source_sample_rate": 44100,
+                      "speed": 2,
+                      "source_offset_sample": "176400"
+                    },
+                    "custom": "retained",
+                    "start_sample": "144000",
+                    "end_sample": "288000"
+                  }
+                ]
+              }
+            ],
+            "timebase": {
+              "sample_rate": 48000,
+              "frame_rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            },
+            "editor_version": 1
+          }
+        }
+      ],
+      "redo": [],
+      "receipts": {
+        "9c5e015b-d59d-4f89-b19f-96a058637266": "b8d89cbf210edeb1a9843c0ee9efc8ffaa9651bee3f1aa515a715649ac1d8fb3",
+        "a57d01cf-8ada-44db-a299-4bb2df9a9e94": "7aeb8dbda9b915588c3107a65e95b73c8d1853fac17f51f024be3fae7151fc6c",
+        "abb9f88b-ae9d-4c93-a2a5-f60eefcc547e": "b80f7cdb3989599a14a599767b9dbd1db931f87ea6a29174bc94e13d0ffc9d18"
+      },
+      "head": "eb546c0f75690b36134f299828c3712f6605e4c85bad156f65e7778b126fc570"
+    }
+  },
+  "schema_version": 2
+}
