@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "project_id": "2cf4da6118444eb28bb40b0f5acebfaf",
+  "saved_at": "2026-09-07 23:40:15",
+  "reason": "timeline_save",
+  "meta": {
+    "editor_contract_version": 1,
+    "timeline": {
+      "fps": 30,
+      "extension": {
+        "keep": true
+      },
+      "tracks": [
+        {
+          "id": "video",
+          "type": "video",
+          "clips": [
+            {
+              "id": "clip",
+              "start_s": 2.0,
+              "end_s": 5.0,
+              "data": {
+                "source_in_s": 2,
+                "source_sample_rate": 44100,
+                "speed": 2
+              },
+              "custom": "retained",
+              "start_sample": "96000",
+              "end_sample": "240000",
+              "muted": true
+            }
+          ]
+        }
+      ],
+      "timebase": {
+        "sample_rate": 48000,
+        "frame_rate": {
+          "numerator": 30,
+          "denominator": 1
+        }
+      },
+      "editor_version": 1
+    },
+    "editor_history": {
+      "undo": [
+        {
+          "label": "Timeline edit",
+          "undo": [
+            {
+              "path": [
+                "editor_version"
+              ],
+              "remove": true
+            },
+            {
+              "path": [
+                "timebase"
+              ],
+              "remove": true
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips",
+                0,
+                "end_sample"
+              ],
+              "remove": true
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips",
+                0,
+                "muted"
+              ],
+              "remove": true
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips",
+                0,
+                "start_sample"
+              ],
+              "remove": true
+            }
+          ],
+          "redo": [
+            {
+              "path": [
+                "editor_version"
+              ],
+              "value": 1
+            },
+            {
+              "path": [
+                "timebase"
+              ],
+              "value": {
+                "sample_rate": 48000,
+                "frame_rate": {
+                  "numerator": 30,
+                  "denominator": 1
+                }
+              }
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips",
+                0,
+                "end_sample"
+              ],
+              "value": "240000"
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips",
+                0,
+                "muted"
+              ],
+              "value": true
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips",
+                0,
+                "start_sample"
+              ],
+              "value": "48000"
+            }
+          ]
+        },
+        {
+          "label": "Legacy timeline save",
+          "undo": [
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips",
+                0,
+                "start_s"
+              ],
+              "value": 1.0
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips",
+                0,
+                "start_sample"
+              ],
+              "value": "48000"
+            }
+          ],
+          "redo": [
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips",
+                0,
+                "start_s"
+              ],
+              "value": 2.0
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips",
+                0,
+                "start_sample"
+              ],
+              "value": "96000"
+            }
+          ]
+        }
+      ],
+      "redo": [],
+      "receipts": {
+        "c5fa885b-323c-4b65-8108-929d3b01adac": "848008e1e60bed24e61a426a08572b47da380577da137e387502ab6f669e152f",
+        "32447c0f-7765-492d-99ff-e5a6aa2fd385": "5d41789b75a205e60079a81dca1e3ce7fbd9f8f2af6557caf9f07d97d861a214"
+      },
+      "head": "28d229a90fad887c7d6c8ebb4c771cbd564cae981d6182a7b8fa3ffdf5dad83f"
+    }
+  }
+}

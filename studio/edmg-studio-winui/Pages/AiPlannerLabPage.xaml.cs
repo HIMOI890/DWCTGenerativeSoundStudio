@@ -9,7 +9,7 @@ using Windows.Storage.Pickers;
 
 namespace EdmgStudio.WinUI.Pages;
 
-public sealed partial class AiPlannerLabPage : Page
+public sealed partial class AiPlannerLabPage : Page, IStudioRefreshable
 {
     private static readonly StudioJsonContext _indentedJsonContext =
         new(new JsonSerializerOptions { WriteIndented = true });
@@ -55,7 +55,7 @@ public sealed partial class AiPlannerLabPage : Page
     private async void AiPlannerLabPage_Loaded(object sender, RoutedEventArgs e)
     {
         _pageLoaded = true;
-        if (!_isVariantDirty) await LoadAsync();
+        await RefreshAsync();
     }
 
     private void AiPlannerLabPage_Unloaded(object sender, RoutedEventArgs e)
@@ -64,7 +64,19 @@ public sealed partial class AiPlannerLabPage : Page
         _operationCancellation?.Cancel();
     }
 
-    private async Task LoadAsync()
+    public Task RefreshAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_pageLoaded || _isOperationBusy || cancellationToken.IsCancellationRequested)
+            return Task.CompletedTask;
+        if (_isVariantDirty)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Planner edits retained", "Save your scene refinements before refreshing the shared Workspace plan.");
+            return Task.CompletedTask;
+        }
+        return LoadAsync(cancellationToken);
+    }
+
+    private async Task LoadAsync(CancellationToken externalCancellationToken = default)
     {
         await RunOperationAsync(
             "Loading Planner context",
@@ -90,7 +102,7 @@ public sealed partial class AiPlannerLabPage : Page
                 await LoadProjectAsync(selectedProject.Id, cancellationToken);
                 await LoadAiReadinessAsync(cancellationToken);
                 ShowStatus(InfoBarSeverity.Success, "Planner ready", $"Loaded {selectedProject.Name}.");
-            });
+            }, externalCancellationToken: externalCancellationToken);
     }
 
     private async Task LoadProjectAsync(string projectId, CancellationToken cancellationToken)
@@ -183,7 +195,7 @@ public sealed partial class AiPlannerLabPage : Page
             return;
         }
 
-        await LoadAsync();
+        await RefreshAsync();
     }
 
     private async void GeneratePlanButton_Click(object sender, RoutedEventArgs e)
@@ -525,9 +537,8 @@ public sealed partial class AiPlannerLabPage : Page
                 async cancellationToken =>
                 {
                     var response = await App.Services.ApiClient.ImportPlannerLabAsync(project.Id, request, cancellationToken);
-                    _plan = response.Plan;
-                    PresentPlan();
-                    await RefreshProjectRevisionAsync(project.Id, cancellationToken);
+                    if (!response.Ok) throw new InvalidDataException("The backend did not import the Planner document.");
+                    await LoadProjectAsync(project.Id, cancellationToken);
                 },
                 successMessage: $"Imported {file.Name}.");
         }
@@ -1018,11 +1029,12 @@ public sealed partial class AiPlannerLabPage : Page
         string title,
         Func<CancellationToken, Task> operation,
         string? successMessage = null,
-        Func<CancellationToken, Task>? afterSuccess = null)
+        Func<CancellationToken, Task>? afterSuccess = null,
+        CancellationToken externalCancellationToken = default)
     {
         if (!_pageLoaded || _isOperationBusy) return;
         _operationCancellation?.Cancel();
-        var operationCancellation = new CancellationTokenSource();
+        var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken);
         _operationCancellation = operationCancellation;
         SetBusy(true);
         ShowStatus(InfoBarSeverity.Informational, title, "Working…");
@@ -1078,6 +1090,7 @@ public sealed partial class AiPlannerLabPage : Page
             if (ReferenceEquals(_operationCancellation, operationCancellation))
             {
                 _operationCancellation = null;
+                _isOperationBusy = false;
                 if (_pageLoaded) SetBusy(false);
             }
         }

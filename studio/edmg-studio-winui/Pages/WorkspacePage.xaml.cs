@@ -128,11 +128,11 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         }
         else if (isPlanner)
         {
-            EnsureSpecialistPage(WorkspacePlannerFrame, typeof(AiPlannerLabPage));
+            await EnsureSpecialistPageAsync(WorkspacePlannerFrame, typeof(AiPlannerLabPage));
         }
         else if (isReactive)
         {
-            EnsureSpecialistPage(WorkspaceReactiveFrame, typeof(ReactiveLabPage));
+            await EnsureSpecialistPageAsync(WorkspaceReactiveFrame, typeof(ReactiveLabPage));
         }
 
         if (!isStoryboard && !isPlanner && !isReactive && IsLoaded && TryGetActiveProjectId(out string projectId))
@@ -1856,11 +1856,18 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         return result is null ? null : result.Path;
     }
 
-    private static void EnsureSpecialistPage(Frame frame, Type pageType)
+    private static async Task EnsureSpecialistPageAsync(Frame frame, Type pageType)
     {
         if (frame.Content?.GetType() != pageType)
         {
+            // The first navigation loads through the child page's Loaded handler.
             frame.Navigate(pageType);
+        }
+        else if (frame.Content is IStudioRefreshable refreshable)
+        {
+            // Collapsing a Workspace panel keeps its page in the visual tree.
+            // Refresh a revisited view without replacing its local editor state.
+            await refreshable.RefreshAsync();
         }
     }
 

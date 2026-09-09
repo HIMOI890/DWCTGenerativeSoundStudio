@@ -9,7 +9,7 @@ using Windows.Storage.Pickers;
 
 namespace EdmgStudio.WinUI.Pages;
 
-public sealed partial class ReactiveLabPage : Page
+public sealed partial class ReactiveLabPage : Page, IStudioRefreshable
 {
     private static readonly StudioJsonContext _indentedJsonContext =
         new(new JsonSerializerOptions { WriteIndented = true });
@@ -35,6 +35,7 @@ public sealed partial class ReactiveLabPage : Page
     private bool _isLoadingPreset;
     private bool _isSessionSubscribed;
     private bool _pageLoaded;
+    private bool _isOperationBusy;
     private bool _isUpdatingKeyframe;
     private bool _keyframesDirty;
     private string? _workflowDraftId;
@@ -88,7 +89,20 @@ public sealed partial class ReactiveLabPage : Page
             _isSessionSubscribed = true;
         }
 
-        await RunOperationAsync("Loading Reactive Lab", LoadProjectsAndContextAsync);
+        await RefreshAsync();
+    }
+
+    public Task RefreshAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_pageLoaded || _isOperationBusy || cancellationToken.IsCancellationRequested)
+            return Task.CompletedTask;
+        if (_keyframesDirty)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Reactive draft retained", "Save your keyframe refinements, or discard them and reload the Workspace draft.");
+            return Task.CompletedTask;
+        }
+        return RunOperationAsync("Refreshing Reactive Lab", LoadProjectsAndContextAsync,
+            externalCancellationToken: cancellationToken);
     }
 
     private void ReactiveLabPage_Unloaded(object sender, RoutedEventArgs e)
@@ -156,7 +170,7 @@ public sealed partial class ReactiveLabPage : Page
 
     private async void Session_Changed(object? sender, EventArgs e)
     {
-        if (_isSynchronizingProject)
+        if (_isSynchronizingProject || _isOperationBusy)
         {
             return;
         }
@@ -489,7 +503,7 @@ public sealed partial class ReactiveLabPage : Page
     }
 
     private async void RefreshButton_Click(object sender, RoutedEventArgs e) =>
-        await RunOperationAsync("Refreshing Reactive Lab", RefreshContextAsync, "Music, cue, asset, plan, and Timeline context refreshed.");
+        await RefreshAsync();
 
     private void CancelButton_Click(object sender, RoutedEventArgs e) =>
         _operationCancellation?.Cancel();
@@ -1196,11 +1210,12 @@ public sealed partial class ReactiveLabPage : Page
     private async Task RunOperationAsync(
         string title,
         Func<CancellationToken, Task> operation,
-        string? successMessage = null)
+        string? successMessage = null,
+        CancellationToken externalCancellationToken = default)
     {
-        if (!_pageLoaded) return;
+        if (!_pageLoaded || _isOperationBusy) return;
         _operationCancellation?.Cancel();
-        using var operationCancellation = new CancellationTokenSource();
+        using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken);
         _operationCancellation = operationCancellation;
         SetBusy(true);
         ShowStatus(InfoBarSeverity.Informational, title, "Working…");
@@ -1212,6 +1227,10 @@ public sealed partial class ReactiveLabPage : Page
             if (!string.IsNullOrWhiteSpace(successMessage))
             {
                 ShowStatus(InfoBarSeverity.Success, "Reactive Lab updated", successMessage);
+            }
+            else if (StatusInfoBar.Title == title && StatusInfoBar.Message == "Working…")
+            {
+                ShowStatus(InfoBarSeverity.Success, "Reactive Lab ready", "The shared Workspace context is up to date.");
             }
         }
         catch (OperationCanceledException) when (operationCancellation.IsCancellationRequested)
@@ -1248,6 +1267,7 @@ public sealed partial class ReactiveLabPage : Page
             if (ReferenceEquals(_operationCancellation, operationCancellation))
             {
                 _operationCancellation = null;
+                _isOperationBusy = false;
                 if (_pageLoaded) SetBusy(false);
             }
         }
@@ -1255,6 +1275,7 @@ public sealed partial class ReactiveLabPage : Page
 
     private void SetBusy(bool isBusy)
     {
+        _isOperationBusy = isBusy;
         OperationProgressBar.Visibility = isBusy ? Visibility.Visible : Visibility.Collapsed;
         CancelButton.IsEnabled = isBusy;
         RefreshButton.IsEnabled = !isBusy;

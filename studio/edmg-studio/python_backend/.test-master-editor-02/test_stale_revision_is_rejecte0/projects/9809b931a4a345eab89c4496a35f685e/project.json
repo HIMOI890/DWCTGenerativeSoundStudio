@@ -1,0 +1,35 @@
+{
+  "id": "9809b931a4a345eab89c4496a35f685e",
+  "name": "Editor",
+  "created_at": "2026-09-07 23:34:52",
+  "updated_at": "2026-09-07 23:34:52",
+  "revision": 2,
+  "meta": {
+    "timeline": {
+      "fps": 30,
+      "extension": {
+        "keep": true
+      },
+      "tracks": [
+        {
+          "id": "video",
+          "type": "video",
+          "clips": [
+            {
+              "id": "clip",
+              "start_s": 1,
+              "end_s": 5,
+              "data": {
+                "source_in_s": 2,
+                "source_sample_rate": 44100,
+                "speed": 2
+              },
+              "custom": "retained"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "schema_version": 2
+}

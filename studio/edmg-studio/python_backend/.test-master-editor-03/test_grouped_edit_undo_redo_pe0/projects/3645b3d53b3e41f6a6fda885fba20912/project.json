@@ -1,0 +1,164 @@
+{
+  "id": "3645b3d53b3e41f6a6fda885fba20912",
+  "name": "Editor",
+  "created_at": "2026-09-07 23:40:14",
+  "updated_at": "2026-09-07 23:40:15",
+  "revision": 5,
+  "meta": {
+    "editor_contract_version": 1,
+    "timeline": {
+      "fps": 30,
+      "extension": {
+        "keep": true
+      },
+      "tracks": [
+        {
+          "id": "video",
+          "type": "video",
+          "clips": [
+            {
+              "id": "clip",
+              "start_s": 2.0,
+              "end_s": 3.0,
+              "data": {
+                "source_in_s": 2,
+                "source_sample_rate": 44100,
+                "speed": 2
+              },
+              "custom": "retained",
+              "start_sample": "96000",
+              "end_sample": "144000"
+            },
+            {
+              "id": "right",
+              "start_s": 3.0,
+              "end_s": 6.0,
+              "data": {
+                "source_in_s": 4.0,
+                "source_sample_rate": 44100,
+                "speed": 2,
+                "source_offset_sample": "176400"
+              },
+              "custom": "retained",
+              "start_sample": "144000",
+              "end_sample": "288000"
+            }
+          ]
+        }
+      ],
+      "editor_version": 1,
+      "timebase": {
+        "sample_rate": 48000,
+        "frame_rate": {
+          "numerator": 30,
+          "denominator": 1
+        }
+      }
+    },
+    "editor_history": {
+      "undo": [
+        {
+          "label": "Timeline edit",
+          "undo": [
+            {
+              "path": [
+                "editor_version"
+              ],
+              "remove": true
+            },
+            {
+              "path": [
+                "timebase"
+              ],
+              "remove": true
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips"
+              ],
+              "value": [
+                {
+                  "id": "clip",
+                  "start_s": 1,
+                  "end_s": 5,
+                  "data": {
+                    "source_in_s": 2,
+                    "source_sample_rate": 44100,
+                    "speed": 2
+                  },
+                  "custom": "retained"
+                }
+              ]
+            }
+          ],
+          "redo": [
+            {
+              "path": [
+                "editor_version"
+              ],
+              "value": 1
+            },
+            {
+              "path": [
+                "timebase"
+              ],
+              "value": {
+                "sample_rate": 48000,
+                "frame_rate": {
+                  "numerator": 30,
+                  "denominator": 1
+                }
+              }
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips"
+              ],
+              "value": [
+                {
+                  "id": "clip",
+                  "start_s": 2.0,
+                  "end_s": 3.0,
+                  "data": {
+                    "source_in_s": 2,
+                    "source_sample_rate": 44100,
+                    "speed": 2
+                  },
+                  "custom": "retained",
+                  "start_sample": "96000",
+                  "end_sample": "144000"
+                },
+                {
+                  "id": "right",
+                  "start_s": 3.0,
+                  "end_s": 6.0,
+                  "data": {
+                    "source_in_s": 4.0,
+                    "source_sample_rate": 44100,
+                    "speed": 2,
+                    "source_offset_sample": "176400"
+                  },
+                  "custom": "retained",
+                  "start_sample": "144000",
+                  "end_sample": "288000"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "redo": [],
+      "receipts": {
+        "68eb62d7-7dc4-4125-b20e-883d78e191e9": "e5e82dfbc2f03941c614728c5d98a373f2493866ad1065cf952c26ca5171de41",
+        "b9391e86-9d85-4f65-a9a7-df1810f4336d": "02cad15da63bafdadd5fa2611ee2a149c6371f22612f1e7f0b894eb92a7289ab",
+        "ec18543b-046c-4844-92b3-7d64bf1fe79a": "7f89b0f78991ae7d4ef98a5b6613820ee7bf5c5c7421481b362d30ff85b52449"
+      },
+      "head": "eb546c0f75690b36134f299828c3712f6605e4c85bad156f65e7778b126fc570"
+    }
+  },
+  "schema_version": 3
+}

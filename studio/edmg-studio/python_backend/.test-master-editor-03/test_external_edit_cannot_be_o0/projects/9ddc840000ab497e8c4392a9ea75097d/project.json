@@ -1,0 +1,158 @@
+{
+  "id": "9ddc840000ab497e8c4392a9ea75097d",
+  "name": "Editor",
+  "created_at": "2026-09-07 23:40:15",
+  "updated_at": "2026-09-07 23:40:15",
+  "revision": 4,
+  "meta": {
+    "editor_contract_version": 1,
+    "timeline": {
+      "fps": 30,
+      "extension": "external",
+      "tracks": [
+        {
+          "id": "video",
+          "type": "video",
+          "clips": [
+            {
+              "id": "clip",
+              "start_s": 1.0,
+              "end_s": 5.0,
+              "data": {
+                "source_in_s": 2,
+                "source_sample_rate": 44100,
+                "speed": 2
+              },
+              "custom": "retained",
+              "start_sample": "48000",
+              "end_sample": "240000"
+            },
+            {
+              "id": "03bbd55b-d988-4b30-98f6-9052ef1d3146",
+              "start_s": 5.0,
+              "end_s": 9.0,
+              "data": {
+                "source_in_s": 2,
+                "source_sample_rate": 44100,
+                "speed": 2
+              },
+              "custom": "retained",
+              "start_sample": "240000",
+              "end_sample": "432000"
+            }
+          ]
+        }
+      ],
+      "timebase": {
+        "sample_rate": 48000,
+        "frame_rate": {
+          "numerator": 30,
+          "denominator": 1
+        }
+      },
+      "editor_version": 1
+    },
+    "editor_history": {
+      "undo": [
+        {
+          "label": "Timeline edit",
+          "undo": [
+            {
+              "path": [
+                "editor_version"
+              ],
+              "remove": true
+            },
+            {
+              "path": [
+                "timebase"
+              ],
+              "remove": true
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips"
+              ],
+              "value": [
+                {
+                  "id": "clip",
+                  "start_s": 1,
+                  "end_s": 5,
+                  "data": {
+                    "source_in_s": 2,
+                    "source_sample_rate": 44100,
+                    "speed": 2
+                  },
+                  "custom": "retained"
+                }
+              ]
+            }
+          ],
+          "redo": [
+            {
+              "path": [
+                "editor_version"
+              ],
+              "value": 1
+            },
+            {
+              "path": [
+                "timebase"
+              ],
+              "value": {
+                "sample_rate": 48000,
+                "frame_rate": {
+                  "numerator": 30,
+                  "denominator": 1
+                }
+              }
+            },
+            {
+              "path": [
+                "tracks",
+                0,
+                "clips"
+              ],
+              "value": [
+                {
+                  "id": "clip",
+                  "start_s": 1.0,
+                  "end_s": 5.0,
+                  "data": {
+                    "source_in_s": 2,
+                    "source_sample_rate": 44100,
+                    "speed": 2
+                  },
+                  "custom": "retained",
+                  "start_sample": "48000",
+                  "end_sample": "240000"
+                },
+                {
+                  "id": "03bbd55b-d988-4b30-98f6-9052ef1d3146",
+                  "start_s": 5.0,
+                  "end_s": 9.0,
+                  "data": {
+                    "source_in_s": 2,
+                    "source_sample_rate": 44100,
+                    "speed": 2
+                  },
+                  "custom": "retained",
+                  "start_sample": "240000",
+                  "end_sample": "432000"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "redo": [],
+      "receipts": {
+        "c1c8f66e-bb1b-4ade-984b-dbf3b0445cf3": "6dc8558f3e367ffeefcd085d4ad120a484e6698dcdd8a78ec23555dbb5a77a93"
+      },
+      "head": "9bea9073f5eb6390060dfe33a2474aead3203bf8c6663bd9278c694894463d47"
+    }
+  },
+  "schema_version": 3
+}

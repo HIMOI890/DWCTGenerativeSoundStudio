@@ -175,6 +175,12 @@ def test_reactive_value_refinements_survive_reanalysis_and_common_apply(workspac
     saved = _review_reactive(workspace, state, payload)
     assert store.get(project.id).meta["timeline"] == before
     assert _workflow(workspace)["reactive"]["keyframes"][0]["strength"] == .271
+    # A second native save round-trips the previously projected extensions.
+    payload = deepcopy(saved["reactive"])
+    saved = _review_reactive(workspace, saved, payload)
+    assert saved["reactive"]["extension"] == {"keep": "document"}
+    assert saved["reactive"]["metadata"]["extension"] == {"keep": "metadata"}
+    assert saved["reactive"]["keyframes"][0]["extension"] == {"keep": "keyframe"}
     features["bpm"] = 130
     refreshed = _analyze(workspace)
     assert refreshed["draft"]["draft_id"] != saved["draft"]["draft_id"]
@@ -198,6 +204,111 @@ def test_reactive_value_refinements_survive_reanalysis_and_common_apply(workspac
     assert motion["strength"] == .271
     loaded = ProjectStore(store.base_dir).get(project.id)
     assert loaded.meta["timeline"] == timeline
+
+
+def test_analysis_only_schedule_read_and_regenerate_use_shared_draft(workspace):
+    client, store, _, project, _ = workspace
+    state = _analyze(workspace)
+    before = deepcopy(store.get(project.id).meta)
+    url = f"/v1/projects/{project.id}/schedule"
+    response = client.get(url)
+    assert response.status_code == 200, response.text
+    assert response.json()["schedule_draft"] == state["draft"]["schedule"]
+    assert response.json()["workflow_status"] == "draft"
+    assert store.get(project.id).meta == before
+    assert not before.get("last_plan")
+
+    document = deepcopy(state["draft"]["document"])
+    document["story_bible"]["project_theme"] = "Reviewed homecoming"
+    state = _post(workspace, "/director/workflow/review", {
+        "draft_id": state["draft"]["draft_id"], "document": document,
+        "expected_revision": state["revision"],
+    })
+    payload = deepcopy(state["reactive"])
+    payload["keyframes"][0]["strength"] = .271
+    state = _review_reactive(workspace, state, payload)
+    regenerated = _post(workspace, "/schedule/regenerate", {"variant_index": 0})
+    refreshed = _workflow(workspace)
+    assert regenerated["schedule_draft"] == refreshed["draft"]["schedule"]
+    assert refreshed["draft"]["source_revision"] == regenerated["revision"]
+    assert refreshed["draft"]["document"] == state["draft"]["document"]
+    assert refreshed["reactive"]["keyframes"][0]["strength"] == .271
+    assert regenerated["schedule_draft"]["schedule_revision"] != state["draft"]["schedule"]["schedule_revision"]
+    assert client.get(url).json()["schedule_draft"] == regenerated["schedule_draft"]
+    assert store.get(project.id).meta["timeline"] == before["timeline"]
+    assert not store.get(project.id).meta.get("last_plan")
+
+
+@pytest.mark.parametrize("generate_plan", [False, True])
+def test_schedule_apply_uses_reactive_review_and_rejects_previous_schedule(workspace, generate_plan):
+    client, store, _, project, _ = workspace
+    state = _analyze(workspace)
+    if generate_plan:
+        _post(workspace, "/plan?mode=local", {"num_variants": 2, "max_scenes": 2})
+        state = _workflow(workspace)
+    payload = deepcopy(state["reactive"])
+    payload["keyframes"][0]["strength"] = .271
+    payload["keyframes"][0]["zoom"] = 1.731
+    reviewed = _review_reactive(workspace, state, payload)
+    draft = reviewed["draft"]
+    assert draft["source_revision"] == reviewed["revision"]
+    assert draft["schedule"]["source_project_revision"] < reviewed["revision"]
+    url = f"/v1/projects/{project.id}/schedule"
+    assert client.get(url).json()["schedule_draft"] == draft["schedule"]
+    before = deepcopy(store.get(project.id).meta)
+
+    for expected_revision, schedule_revision, code in (
+        (reviewed["revision"], state["draft"]["schedule"]["schedule_revision"], "SCHEDULE_REVISION_CONFLICT"),
+        (state["revision"], draft["schedule"]["schedule_revision"], "PROJECT_REVISION_CONFLICT"),
+    ):
+        response = client.post(url + "/apply", json={
+            "expected_revision": expected_revision, "schedule_revision": schedule_revision,
+        })
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["code"] == code
+        assert store.get(project.id).meta == before
+
+    applied = _post(workspace, "/schedule/apply", {
+        "schedule_revision": draft["schedule"]["schedule_revision"],
+    })
+    assert _workflow(workspace)["status"] == "applied"
+    reactive = applied["timeline"]["reactive_lab"]
+    assert reactive["keyframes"][0]["strength"] == .271
+    assert reactive["keyframes"][0]["zoom"] == 1.731
+    assert applied["timeline"]["tracks"][0] == before["timeline"]["tracks"][0]
+    if generate_plan:
+        assert store.get(project.id).meta["last_plan"]["variants"][1] == before["last_plan"]["variants"][1]
+
+
+def test_alternate_schedule_keeps_legacy_source_revision_guard(workspace):
+    client, store, _, project, _ = workspace
+    _analyze(workspace)
+    _post(workspace, "/plan?mode=local", {"num_variants": 2, "max_scenes": 2})
+    state = _workflow(workspace)
+    assert state["draft"]["variant_index"] == 0
+    alternate = deepcopy(store.get(project.id).meta["last_plan"]["variants"][1]["schedule_draft"])
+    url = f"/v1/projects/{project.id}/schedule"
+    response = client.get(url, params={"variant_index": 1})
+    assert response.status_code == 200, response.text
+    assert response.json()["schedule_draft"] == alternate
+    assert "workflow_status" not in response.json()
+    store.mutate(project.id, lambda current: current.meta.update({"notes": "A later project edit"}))
+    before = deepcopy(store.get(project.id).meta)
+    response = client.post(url + "/apply", json={
+        "expected_revision": store.get(project.id).revision, "variant_index": 1,
+        "schedule_revision": alternate["schedule_revision"],
+    })
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "SCHEDULE_SOURCE_STALE"
+    assert store.get(project.id).meta == before
+    regenerated = _post(workspace, "/schedule/regenerate", {"variant_index": 1})
+    assert _workflow(workspace)["draft"]["variant_index"] == 1
+    assert regenerated["schedule_draft"] == client.get(url, params={"variant_index": 1}).json()["schedule_draft"]
+    applied = _post(workspace, "/schedule/apply", {
+        "variant_index": 1, "schedule_revision": regenerated["schedule_draft"]["schedule_revision"],
+    })
+    assert applied["timeline"]["approved_schedule"]["variant_index"] == 1
+    assert store.get(project.id).meta["last_plan"]["variants"][0] == before["last_plan"]["variants"][0]
 
 
 @pytest.mark.parametrize("field,value", [("time", 1.5), ("sample", "9000"), ("source_id", "other-scene"), ("steps", 2.5), ("strength", 5)])

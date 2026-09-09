@@ -1,0 +1,143 @@
+{
+  "id": "7a38a6d13b5147a4a4598616caa1c487",
+  "name": "Editor",
+  "created_at": "2026-09-07 23:32:05",
+  "updated_at": "2026-09-07 23:32:05",
+  "revision": 3,
+  "meta": {
+    "timeline": {
+      "fps": 30,
+      "extension": {
+        "keep": true
+      },
+      "tracks": [
+        {
+          "id": "video",
+          "type": "video",
+          "clips": [
+            {
+              "id": "clip",
+              "start_s": 1.0,
+              "end_s": 5.0,
+              "data": {
+                "source_in_s": 2,
+                "source_sample_rate": 44100,
+                "speed": 2
+              },
+              "custom": "retained",
+              "start_sample": "48000",
+              "end_sample": "240000"
+            },
+            {
+              "id": "96015004-2514-4592-9a1e-bd67bd67bc21",
+              "start_s": 5.0,
+              "end_s": 9.0,
+              "data": {
+                "source_in_s": 2,
+                "source_sample_rate": 44100,
+                "speed": 2
+              },
+              "custom": "retained",
+              "start_sample": "240000",
+              "end_sample": "432000"
+            }
+          ]
+        }
+      ],
+      "timebase": {
+        "sample_rate": 48000,
+        "frame_rate": {
+          "numerator": 30,
+          "denominator": 1
+        }
+      },
+      "editor_version": 1
+    },
+    "editor_history": {
+      "undo": [
+        {
+          "label": "Timeline edit",
+          "before": {
+            "fps": 30,
+            "extension": {
+              "keep": true
+            },
+            "tracks": [
+              {
+                "id": "video",
+                "type": "video",
+                "clips": [
+                  {
+                    "id": "clip",
+                    "start_s": 1,
+                    "end_s": 5,
+                    "data": {
+                      "source_in_s": 2,
+                      "source_sample_rate": 44100,
+                      "speed": 2
+                    },
+                    "custom": "retained"
+                  }
+                ]
+              }
+            ]
+          },
+          "after": {
+            "fps": 30,
+            "extension": {
+              "keep": true
+            },
+            "tracks": [
+              {
+                "id": "video",
+                "type": "video",
+                "clips": [
+                  {
+                    "id": "clip",
+                    "start_s": 1.0,
+                    "end_s": 5.0,
+                    "data": {
+                      "source_in_s": 2,
+                      "source_sample_rate": 44100,
+                      "speed": 2
+                    },
+                    "custom": "retained",
+                    "start_sample": "48000",
+                    "end_sample": "240000"
+                  },
+                  {
+                    "id": "96015004-2514-4592-9a1e-bd67bd67bc21",
+                    "start_s": 5.0,
+                    "end_s": 9.0,
+                    "data": {
+                      "source_in_s": 2,
+                      "source_sample_rate": 44100,
+                      "speed": 2
+                    },
+                    "custom": "retained",
+                    "start_sample": "240000",
+                    "end_sample": "432000"
+                  }
+                ]
+              }
+            ],
+            "timebase": {
+              "sample_rate": 48000,
+              "frame_rate": {
+                "numerator": 30,
+                "denominator": 1
+              }
+            },
+            "editor_version": 1
+          }
+        }
+      ],
+      "redo": [],
+      "receipts": {
+        "retry": "c63246a19900d700f19fc0d9bebe333ece16f1ae7c9e2ec6a3c7d293cddcb173"
+      },
+      "head": "e5ecbb3299857cd47b843c4abd182545f5be1214d294c12b4b7af6e31fab8bd9"
+    }
+  },
+  "schema_version": 2
+}

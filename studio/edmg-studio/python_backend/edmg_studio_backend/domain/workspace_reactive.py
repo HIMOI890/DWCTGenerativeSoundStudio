@@ -86,7 +86,9 @@ def review_reactive(draft, payload: dict, clock: ProjectClock) -> dict:
     if len(points) != len(supplied):
         raise ValueError("Reactive keyframes need unique source IDs")
     overrides = deepcopy(draft.reactive_overrides)
-    draft.reactive_extensions["payload"] = {key: deepcopy(value) for key, value in payload.items() if key not in expected}
+    prior_payload_extensions = draft.reactive_extensions.get("payload", {})
+    draft.reactive_extensions["payload"] = {key: deepcopy(value) for key, value in payload.items()
+                                            if key not in expected or key in prior_payload_extensions}
     draft.reactive_extensions["metadata"] = {key: deepcopy(value) for key, value in (payload.get("metadata") or {}).items()
                                             if key not in expected["metadata"] or key in draft.reactive_extensions.get("metadata", {})}
     point_extensions = draft.reactive_extensions.setdefault("keyframes", {})
