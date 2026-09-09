@@ -31,3 +31,7 @@ def test_render_worker_command_calls_frozen_backend_cli_directly(monkeypatch) ->
         "--job",
         "job-456",
     ]
+
+
+def test_render_worker_command_carries_the_claimed_attempt():
+    assert backend_app._render_worker_command("project", "job", attempt=3)[-2:] == ["--attempt", "3"]

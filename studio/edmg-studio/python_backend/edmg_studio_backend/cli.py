@@ -13,16 +13,21 @@ from .app import app, jobs, _execute_job
 from .security import validate_remote_bind_security
 
 
-def _run_single_job(project_id: str, job_id: str) -> int:
+def _run_single_job(project_id: str, job_id: str, *, attempt: int | None = None) -> int:
     """Execute one already-claimed job in this process and finalize it.
 
     Used by the worker for process isolation: heavy render jobs run here so they
     cannot starve the FastAPI server. Progress/logs/results are written to the
-    file-based job store that the server polls.
+    shared job store that the server polls.
     """
     job = jobs.get(project_id, job_id)
     if job is None:
         sys.stderr.write(f"Job not found: project={project_id} job={job_id}\n")
+        return 2
+    if job.status not in ("queued", "running"):
+        return 0 if job.status in ("succeeded", "canceled") else 1
+    if attempt is not None and job.attempt != attempt:
+        sys.stderr.write("Job attempt changed before the worker started.\n")
         return 2
     _execute_job(job)
     latest = jobs.get(project_id, job_id) or job
@@ -47,6 +52,7 @@ def main() -> None:
     )
     rj.add_argument("--project", required=True)
     rj.add_argument("--job", required=True)
+    rj.add_argument("--attempt", type=int)
 
     args = p.parse_args()
 
@@ -57,7 +63,7 @@ def main() -> None:
             p.error(str(exc))
         uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
     elif args.cmd == "run-job":
-        raise SystemExit(_run_single_job(args.project, args.job))
+        raise SystemExit(_run_single_job(args.project, args.job, attempt=args.attempt))
 
 
 if __name__ == "__main__":

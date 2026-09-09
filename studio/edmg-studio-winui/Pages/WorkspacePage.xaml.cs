@@ -36,8 +36,17 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     private long _directorRevision;
     private string? _directorProjectId;
     private string? _directorReviewedJobId;
+    private string? _directorDraftJobId;
+    private string? _directorDraftJobStatus;
     private DirectorGenerationRequest? _directorPendingRequest;
     private JsonElement? _directorReadiness;
+    private JsonObject? _workflowDocument;
+    private JsonObject? _workflowSavedDocument;
+    private string? _workflowProjectId;
+    private string? _workflowDraftId;
+    private string _workflowStatus = "not_prepared";
+    private long _workflowRevision;
+    private bool _workflowWriteInProgress;
 
     public WorkspacePage()
     {
@@ -50,11 +59,13 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     public ObservableCollection<WorkspaceStoryboardItem> StoryboardItems { get; } = [];
 
+    public ObservableCollection<WorkspaceDirectionSceneItem> WorkflowSceneItems { get; } = [];
+
     protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
         OverviewSelectorItem.IsSelected = true;
-        SetWorkspaceMode(isStoryboard: false, isDirector: false, isPlanner: false, isReactive: false);
+        SetWorkspaceMode(isStoryboard: false, isPlanner: false, isReactive: false);
         await RefreshAsync();
     }
 
@@ -66,6 +77,15 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     public Task RefreshAsync(CancellationToken cancellationToken = default) =>
         RunBusyAsync("Refreshing Workspace", LoadProjectsAndWorkspaceAsync, cancellationToken);
+
+    protected override void OnNavigatingFrom(NavigatingCancelEventArgs e)
+    {
+        if (ProtectUnsavedWorkflowEdits())
+        {
+            e.Cancel = true;
+        }
+        base.OnNavigatingFrom(e);
+    }
 
     private async Task LoadProjectsAndWorkspaceAsync(CancellationToken cancellationToken)
     {
@@ -99,17 +119,12 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
     private async void WorkspaceMode_SelectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs args)
     {
         bool isStoryboard = sender.SelectedItem == StoryboardSelectorItem;
-        bool isDirector = sender.SelectedItem == DirectorSelectorItem;
         bool isPlanner = sender.SelectedItem == PlannerSelectorItem;
         bool isReactive = sender.SelectedItem == ReactiveSelectorItem;
-        SetWorkspaceMode(isStoryboard, isDirector, isPlanner, isReactive);
+        SetWorkspaceMode(isStoryboard, isPlanner, isReactive);
         if (isStoryboard)
         {
             PopulateStoryboard();
-        }
-        else if (isDirector && TryGetActiveProjectId(out string projectId))
-        {
-            await RunBusyAsync("Loading Director", token => LoadDirectorAsync(projectId, token));
         }
         else if (isPlanner)
         {
@@ -120,7 +135,14 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             EnsureSpecialistPage(WorkspaceReactiveFrame, typeof(ReactiveLabPage));
         }
 
-        await Task.CompletedTask;
+        if (!isStoryboard && !isPlanner && !isReactive && IsLoaded && TryGetActiveProjectId(out string projectId))
+        {
+            await RunBusyAsync("Refreshing Workspace direction", async token =>
+            {
+                await RefreshProjectSnapshotAsync(projectId, token);
+                await LoadWorkflowAsync(projectId, token);
+            });
+        }
     }
 
     private async void ProjectComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -132,6 +154,13 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
         if (_session.ActiveProjectId != project.Id)
         {
+            if (ProtectUnsavedWorkflowEdits())
+            {
+                _isSynchronizingSelection = true;
+                ProjectComboBox.SelectedItem = _projects.FirstOrDefault(item => item.Id == _session.ActiveProjectId);
+                _isSynchronizingSelection = false;
+                return;
+            }
             _session.ActiveProjectId = project.Id;
             _generatedPlan = null;
         }
@@ -166,7 +195,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private async void UploadAnalyzeButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!TryGetActiveProjectId(out string projectId))
+        if (!TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits())
         {
             return;
         }
@@ -192,7 +221,9 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             ShowStatus(
                 "Audio analysis ready",
                 analysis.Ok
-                    ? "BPM, duration, sections, tags, and transcript status were refreshed."
+                    ? _workflowStatus == "draft"
+                        ? "Audio analysis, Director scenes, and the reactive schedule are ready for review below."
+                        : "Audio analysis was refreshed. Check the Director scene draft status below."
                     : "The backend returned an incomplete analysis result.",
                 analysis.Ok ? InfoBarSeverity.Success : InfoBarSeverity.Warning);
         });
@@ -297,7 +328,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
     private async void GeneratePlanButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!TryGetActiveProjectId(out string projectId))
+        if (!TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits())
         {
             return;
         }
@@ -319,6 +350,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
                 mode,
                 cancellationToken);
             await RefreshProjectSnapshotAsync(projectId, cancellationToken);
+            await LoadWorkflowAsync(projectId, cancellationToken);
             SynchronizeVariantSelection();
             PopulatePlanning();
             SetLastOperationJson(_generatedPlan);
@@ -601,10 +633,8 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
 
         _projectResponse = project;
         PopulateProject();
-        if (WorkspaceModeSelector.SelectedItem == DirectorSelectorItem)
-        {
-            await LoadDirectorAsync(projectId, cancellationToken);
-        }
+        await LoadWorkflowAsync(projectId, cancellationToken);
+        await LoadDirectorAsync(projectId, cancellationToken);
         await LoadOptionalWorkspaceDataAsync(projectId, cancellationToken, loadVersion);
     }
 
@@ -723,17 +753,266 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         PopulateMetadata(project);
     }
 
+    private async Task LoadWorkflowAsync(string projectId, CancellationToken cancellationToken, bool discardLocalEdits = false)
+    {
+        JsonElement response = await App.Services.ApiClient.GetDirectorWorkflowAsync(projectId, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_session.ActiveProjectId != projectId)
+        {
+            return;
+        }
+
+        if (!discardLocalEdits && _workflowProjectId == projectId && HasUnsavedWorkflowEdits())
+        {
+            // Refresh may run when another Workspace tab changes the project. Preserve the
+            // user's local JSON and only allow saving against the same current draft.
+            string? latestId = response.TryGetProperty("draft", out JsonElement draft) && draft.ValueKind == JsonValueKind.Object
+                ? draft.GetProperty("draft_id").GetString() : null;
+            string latestStatus = response.GetProperty("status").GetString() ?? "not_prepared";
+            if (latestId == _workflowDraftId && latestStatus == "draft")
+            {
+                _workflowRevision = response.GetProperty("revision").GetInt64();
+                WorkflowStatusText.Text = "Your local draft edits are retained. Save or apply them when ready.";
+            }
+            else
+            {
+                _workflowStatus = "stale";
+                SaveWorkflowButton.IsEnabled = false;
+                ApplyWorkflowButton.IsEnabled = false;
+                WorkflowStatusText.Text = "The shared draft changed. Your local edits are retained; copy anything you need before discarding them and loading the current draft.";
+            }
+            return;
+        }
+
+        ApplyWorkflowResponse(projectId, response);
+    }
+
+    private void ApplyWorkflowResponse(string projectId, JsonElement response)
+    {
+        _workflowProjectId = projectId;
+        _workflowRevision = response.GetProperty("revision").GetInt64();
+        _workflowStatus = response.GetProperty("status").GetString() ?? "not_prepared";
+        if (response.TryGetProperty("plan", out JsonElement plan) && plan.ValueKind == JsonValueKind.Object)
+        {
+            _generatedPlan = JsonSerializer.Deserialize(plan.GetRawText(), StudioJson.GetTypeInfo<PlanDto>());
+            PopulatePlanning();
+        }
+        _workflowDocument = null;
+        _workflowSavedDocument = null;
+        _workflowDraftId = null;
+        WorkflowSceneItems.Clear();
+        WorkflowThemeTextBox.Text = string.Empty;
+        WorkflowStyleTextBox.Text = string.Empty;
+        WorkflowSummaryText.Text = string.Empty;
+        bool editable = _workflowStatus == "draft";
+        WorkflowThemeTextBox.IsEnabled = editable;
+        WorkflowStyleTextBox.IsEnabled = editable;
+        SaveWorkflowButton.IsEnabled = editable;
+        ApplyWorkflowButton.IsEnabled = editable;
+        DiscardWorkflowEditsButton.IsEnabled = false;
+        PrepareWorkflowButton.IsEnabled = _projectResponse?.Project.HasAnalysis == true;
+
+        if (!response.TryGetProperty("draft", out JsonElement draft) || draft.ValueKind != JsonValueKind.Object)
+        {
+            WorkflowStatusText.Text = response.TryGetProperty("preparation_error", out JsonElement error) && error.ValueKind == JsonValueKind.String
+                ? $"Audio analysis is saved, but direction preparation needs attention: {error.GetString()}"
+                : "Analyze audio to automatically prepare Director scenes and the reactive schedule.";
+            return;
+        }
+
+        _workflowDraftId = draft.GetProperty("draft_id").GetString();
+        _workflowDocument = JsonNode.Parse(draft.GetProperty("document").GetRawText())!.AsObject();
+        JsonObject? bible = _workflowDocument["story_bible"] as JsonObject;
+        WorkflowThemeTextBox.Text = bible?["project_theme"]?.GetValue<string>() ?? string.Empty;
+        WorkflowStyleTextBox.Text = bible?["visual_style"]?.GetValue<string>() ?? string.Empty;
+        int sampleRate = draft.TryGetProperty("provenance", out JsonElement provenance) &&
+                         provenance.TryGetProperty("sample_rate", out JsonElement rate) && rate.TryGetInt32(out int value) && value > 0
+            ? value : 48_000;
+        foreach (JsonObject scene in (_workflowDocument["scenes"] as JsonArray ?? []).OfType<JsonObject>())
+        {
+            WorkflowSceneItems.Add(new WorkspaceDirectionSceneItem(scene, sampleRate, editable, WorkflowEditsChanged));
+        }
+        _workflowSavedDocument = BuildWorkflowDocument();
+        int cameraCount = 0;
+        int motionCount = 0;
+        int markerCount = 0;
+        if (draft.TryGetProperty("schedule", out JsonElement schedule))
+        {
+            cameraCount = WorkflowArrayCount(schedule, "camera_keys");
+            motionCount = WorkflowArrayCount(schedule, "motion_keys");
+            markerCount = WorkflowArrayCount(schedule, "markers");
+        }
+        string analysisRevision = _workflowDocument["analysis_revision"]?.ToString() ?? "unavailable";
+        WorkflowSummaryText.Text = $"{WorkflowSceneItems.Count} scenes · {cameraCount} camera keys · {motionCount} motion keys · {markerCount} markers · analysis revision {analysisRevision}";
+        WorkflowStatusText.Text = _workflowStatus switch
+        {
+            "applied" => "Direction and its reactive schedule are applied. AI Planner and Reactive Lab use this shared Workspace result.",
+            "stale" => "Analysis, direction, or the timeline changed. Prepare a current draft before applying it.",
+            _ => "Director scenes and the reactive schedule are ready together. Review here or in AI Planner and Reactive Lab, then apply once."
+        };
+        if (draft.TryGetProperty("warnings", out JsonElement warnings) && warnings.ValueKind == JsonValueKind.Array)
+        {
+            string detail = string.Join(" ", warnings.EnumerateArray().Select(item => item.GetString()).Where(item => !string.IsNullOrWhiteSpace(item)));
+            if (!string.IsNullOrWhiteSpace(detail))
+            {
+                WorkflowStatusText.Text += Environment.NewLine + detail;
+            }
+        }
+        UpdateWorkflowEditingAvailability();
+    }
+
+    private static int WorkflowArrayCount(JsonElement value, string property) =>
+        value.ValueKind == JsonValueKind.Object && value.TryGetProperty(property, out JsonElement array) && array.ValueKind == JsonValueKind.Array
+            ? array.GetArrayLength() : 0;
+
+    private JsonObject BuildWorkflowDocument()
+    {
+        JsonObject document = _workflowDocument?.DeepClone().AsObject()
+            ?? throw new InvalidOperationException("The shared Workspace draft has not loaded yet.");
+        JsonObject bible = document["story_bible"]?.AsObject() ?? new JsonObject();
+        bible["project_theme"] = WorkflowThemeTextBox.Text;
+        bible["visual_style"] = WorkflowStyleTextBox.Text;
+        document["story_bible"] = bible;
+        return document;
+    }
+
+    private bool HasUnsavedWorkflowEdits() => _workflowDocument is not null && _workflowSavedDocument is not null &&
+        !JsonNode.DeepEquals(BuildWorkflowDocument(), _workflowSavedDocument);
+
+    private bool ProtectUnsavedWorkflowEdits()
+    {
+        if (!HasUnsavedWorkflowEdits())
+        {
+            return false;
+        }
+        ShowStatus("Draft edits are unsaved", "Save or apply your draft edits in Overview + Director before continuing, or choose Discard local edits to reload the saved draft.", InfoBarSeverity.Warning);
+        return true;
+    }
+
+    private void WorkflowEditsChanged() => DiscardWorkflowEditsButton.IsEnabled = HasUnsavedWorkflowEdits();
+
+    private void UpdateWorkflowEditingAvailability()
+    {
+        bool editable = _workflowStatus == "draft" && !_workflowWriteInProgress;
+        WorkflowThemeTextBox.IsEnabled = editable;
+        WorkflowStyleTextBox.IsEnabled = editable;
+        WorkflowScenesList.IsEnabled = editable;
+        SaveWorkflowButton.IsEnabled = editable;
+        ApplyWorkflowButton.IsEnabled = editable;
+        DiscardWorkflowEditsButton.IsEnabled = !_workflowWriteInProgress && HasUnsavedWorkflowEdits();
+        PrepareWorkflowButton.IsEnabled = !_workflowWriteInProgress && _projectResponse?.Project.HasAnalysis == true;
+    }
+
+    private void WorkflowInputs_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (DiscardWorkflowEditsButton is not null)
+        {
+            WorkflowEditsChanged();
+        }
+    }
+
+    private async void DiscardWorkflowEditsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_workflowProjectId is not string projectId || projectId != _session.ActiveProjectId)
+        {
+            return;
+        }
+        await RunBusyAsync("Reloading saved Workspace draft", token => LoadWorkflowAsync(projectId, token, discardLocalEdits: true));
+    }
+
+    private async void PrepareWorkflowButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!TryGetActiveProjectId(out string projectId) || ProtectUnsavedWorkflowEdits())
+        {
+            return;
+        }
+        await RunBusyAsync("Preparing Workspace direction and reactive schedule", async token =>
+        {
+            await RefreshProjectSnapshotAsync(projectId, token);
+            token.ThrowIfCancellationRequested();
+            if (_session.ActiveProjectId != projectId)
+            {
+                return;
+            }
+            JsonElement response = await App.Services.ApiClient.PrepareDirectorWorkflowAsync(
+                projectId, new DirectorApplyRequest(_projectResponse!.Project.Revision), token);
+            token.ThrowIfCancellationRequested();
+            if (_session.ActiveProjectId != projectId)
+            {
+                return;
+            }
+            ApplyWorkflowResponse(projectId, response);
+            await RefreshProjectSnapshotAsync(projectId, token);
+        });
+    }
+
+    private async void SaveWorkflowButton_Click(object sender, RoutedEventArgs e) => await ReviewWorkflowAsync(apply: false);
+
+    private async void ApplyWorkflowButton_Click(object sender, RoutedEventArgs e) => await ReviewWorkflowAsync(apply: true);
+
+    private async Task ReviewWorkflowAsync(bool apply)
+    {
+        if (_workflowProjectId is not string projectId || _workflowDraftId is not string draftId ||
+            _session.ActiveProjectId != projectId || _workflowStatus != "draft")
+        {
+            return;
+        }
+        using JsonDocument payload = JsonDocument.Parse(BuildWorkflowDocument().ToJsonString());
+        JsonElement document = payload.RootElement.Clone();
+        var request = new DirectorWorkflowReviewRequest(_workflowRevision, draftId, document);
+        _workflowWriteInProgress = true;
+        UpdateWorkflowEditingAvailability();
+        try
+        {
+            await RunBusyAsync(apply ? "Applying Workspace direction and reactive schedule" : "Saving Workspace draft edits", async token =>
+            {
+                JsonElement response = apply
+                    ? await App.Services.ApiClient.ApplyDirectorWorkflowAsync(projectId, request, token)
+                    : await App.Services.ApiClient.ReviewDirectorWorkflowAsync(projectId, request, token);
+                token.ThrowIfCancellationRequested();
+                if (_session.ActiveProjectId != projectId)
+                {
+                    return;
+                }
+                ApplyWorkflowResponse(projectId, response);
+                await RefreshProjectSnapshotAsync(projectId, token);
+                if (apply)
+                {
+                    await LoadDirectorAsync(projectId, token);
+                }
+                ShowStatus(apply ? "Workspace direction applied" : "Workspace draft saved",
+                    apply ? "Director scenes and their reactive schedule are now available to Timeline and Render."
+                        : "Your draft edits and updated reactive schedule are saved for review across Workspace tabs.",
+                    InfoBarSeverity.Success);
+            });
+        }
+        finally
+        {
+            _workflowWriteInProgress = false;
+            UpdateWorkflowEditingAvailability();
+        }
+    }
+
     private async Task LoadDirectorAsync(string projectId, CancellationToken cancellationToken)
     {
         JsonElement response = await App.Services.ApiClient.GetDirectorDocumentAsync(projectId, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (_session.ActiveProjectId != projectId)
         {
+            return;
+        }
+
+        if (_directorProjectId == projectId && _directorDocument is not null && !WorkspaceDirectorInputsMatchDocument())
+        {
+            WorkspaceDirectorStatusText.Text = "Your unsaved advanced direction edits are retained. Save them before loading another direction.";
             return;
         }
 
         _directorProjectId = projectId;
         _directorPendingRequest = null;
         _directorReviewedJobId = null;
+        _directorDraftJobId = null;
+        _directorDraftJobStatus = null;
         WorkspaceDirectorDraftTextBox.Text = string.Empty;
         ApplyDirectorWorkspaceDocument(response);
         DirectorSessionText.Text =
@@ -947,6 +1226,9 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         PrepareWorkspacePromptsButton.IsEnabled = hasProject && saved && _directorDocument?["scenes"]?.AsArray().Count > 0;
         GenerateWorkspaceDirectorButton.IsEnabled = hasProject && saved && _directorDocument?["scenes"]?.AsArray().Count > 0;
         ReviewWorkspaceDirectorButton.IsEnabled = hasProject && !string.IsNullOrWhiteSpace(_session.SelectedJobId);
+        CancelWorkspaceDirectorButton.IsEnabled = hasProject &&
+            !string.IsNullOrWhiteSpace(_directorDraftJobId) && _directorDraftJobId == _session.SelectedJobId &&
+            _directorDraftJobStatus is "queued" or "running" or "paused";
         ApplyWorkspaceDirectorButton.IsEnabled = hasProject && !string.IsNullOrWhiteSpace(_directorReviewedJobId);
     }
 
@@ -1046,6 +1328,7 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
                 cancellationToken);
             ApplyDirectorWorkspaceDocument(response);
             await RefreshProjectSnapshotAsync(projectId, cancellationToken);
+            await LoadWorkflowAsync(projectId, cancellationToken);
             WorkspaceDirectorStatusText.Text = "Story Bible and SceneSpecs saved to the shared Workspace project.";
             ShowStatus("Director saved", "The direction is now available to Timeline, Render, Queue, and both Studio clients.", InfoBarSeverity.Success);
         });
@@ -1112,14 +1395,21 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
                     false);
             }
             JsonElement response = await App.Services.ApiClient.GenerateDirectorAsync(projectId, _directorPendingRequest, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_directorProjectId != projectId || _session.ActiveProjectId != projectId)
+            {
+                return;
+            }
             string jobId = response.GetProperty("job_id").GetString() ?? string.Empty;
             App.Services.Session.SetSelectedJob(projectId, jobId);
+            _directorDraftJobId = jobId;
+            _directorDraftJobStatus = response.GetProperty("status").GetString();
             _directorPendingRequest = null;
             _directorReviewedJobId = null;
             WorkspaceDirectorDraftTextBox.Text = "Draft queued. Review it here after the queue reports completion.";
             WorkspaceDirectorStatusText.Text = $"Director draft queued in the shared project queue ({jobId}).";
             UpdateDirectorWorkspaceAvailability();
-            ShowStatus("Director draft queued", "Track progress or cancel the job in Queue, then review it here.", InfoBarSeverity.Success);
+            ShowStatus("Director draft queued", "Review progress or cancel the draft here. Completed drafts wait for your review and apply action.", InfoBarSeverity.Success);
         });
     }
 
@@ -1131,24 +1421,72 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
             return;
         }
 
+        string jobId = _session.SelectedJobId!;
         await RunBusyAsync("Reviewing Director draft", async cancellationToken =>
         {
-            JsonElement response = await App.Services.ApiClient.GetDirectorDraftAsync(projectId, _session.SelectedJobId!, cancellationToken);
+            JsonElement response = await App.Services.ApiClient.GetDirectorDraftAsync(projectId, jobId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_directorProjectId != projectId || _session.ActiveProjectId != projectId)
+            {
+                return;
+            }
             string status = response.GetProperty("status").GetString() ?? "unknown";
+            _directorDraftJobId = jobId;
+            _directorDraftJobStatus = status;
             if (!string.Equals(status, "succeeded", StringComparison.OrdinalIgnoreCase))
             {
                 _directorReviewedJobId = null;
-                WorkspaceDirectorDraftTextBox.Text = $"Job {status}: {response.GetProperty("error").GetString()}";
-                WorkspaceDirectorStatusText.Text = "The Director draft is not ready yet. Review again after the queue reports completion.";
+                string message = response.TryGetProperty("error", out JsonElement error) && error.ValueKind == JsonValueKind.String
+                    ? error.GetString() ?? string.Empty
+                    : string.Empty;
+                if (message.Length == 0 &&
+                    response.TryGetProperty("progress", out JsonElement progress) && progress.ValueKind == JsonValueKind.Object &&
+                    progress.TryGetProperty("message", out JsonElement progressMessage) && progressMessage.ValueKind == JsonValueKind.String)
+                {
+                    message = progressMessage.GetString() ?? string.Empty;
+                }
+                WorkspaceDirectorDraftTextBox.Text = $"Job {status}: {message}";
+                WorkspaceDirectorStatusText.Text = status switch
+                {
+                    "canceled" => "Director generation canceled. Saved direction is unchanged.",
+                    "failed" => "Director generation failed. Review the details before retrying.",
+                    _ => "The Director is still working. Review again for progress, or cancel the draft here."
+                };
                 UpdateDirectorWorkspaceAvailability();
                 return;
             }
 
-            _directorReviewedJobId = _session.SelectedJobId;
+            _directorReviewedJobId = jobId;
             WorkspaceDirectorDraftTextBox.Text = response.GetProperty("result").GetProperty("document").ToString();
             WorkspaceDirectorStatusText.Text = "Draft loaded for review. Apply it only after checking the Story Bible and scene constraints.";
             UpdateDirectorWorkspaceAvailability();
             ShowStatus("Draft ready", "Review the draft, then apply it to the saved Workspace direction when approved.", InfoBarSeverity.Informational);
+        });
+    }
+
+    private async void CancelWorkspaceDirectorButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_directorProjectId is not string projectId || _directorDraftJobId is not string jobId ||
+            jobId != _session.SelectedJobId || _directorDraftJobStatus is not ("queued" or "running" or "paused"))
+        {
+            return;
+        }
+
+        await RunBusyAsync("Canceling Director draft", async cancellationToken =>
+        {
+            StudioJobActionResponse response = await App.Services.ApiClient.CancelJobAsync(projectId, jobId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_directorProjectId != projectId || _session.ActiveProjectId != projectId || _directorDraftJobId != jobId)
+            {
+                return;
+            }
+            _directorDraftJobStatus = response.Job.Status;
+            _directorReviewedJobId = null;
+            WorkspaceDirectorDraftTextBox.Text = $"Job {response.Job.Status}: {jobId}";
+            WorkspaceDirectorStatusText.Text = response.Job.Status == "canceled"
+                ? "Director generation canceled. Saved direction is unchanged. The worker is finishing cancellation."
+                : $"The job is already {response.Job.Status}. Review the draft for its latest result.";
+            UpdateDirectorWorkspaceAvailability();
         });
     }
 
@@ -1402,33 +1740,47 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         CancellationToken cancellationToken = default)
     {
         CancelCurrentOperation();
-        _operationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var operationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _operationCts = operationCts;
         WorkspaceProgressRing.IsActive = true;
         WorkspaceProgressRing.Visibility = Visibility.Visible;
 
         try
         {
-            await action(_operationCts.Token);
+            await action(operationCts.Token);
         }
-        catch (OperationCanceledException) when (_operationCts.IsCancellationRequested)
+        catch (OperationCanceledException) when (operationCts.IsCancellationRequested)
         {
         }
         catch (ProjectRevisionConflictException conflict)
         {
-            await HandleProjectRevisionConflictAsync(conflict, _operationCts.Token);
+            if (!operationCts.IsCancellationRequested)
+            {
+                await HandleProjectRevisionConflictAsync(conflict, operationCts.Token);
+            }
         }
         catch (StudioApiException exception)
         {
-            ShowStatus($"{operation} failed", exception.UserFacingMessage, InfoBarSeverity.Error);
+            if (!operationCts.IsCancellationRequested)
+            {
+                ShowStatus($"{operation} failed", exception.UserFacingMessage, InfoBarSeverity.Error);
+            }
         }
         catch (Exception exception)
         {
-            ShowStatus($"{operation} failed", exception.Message, InfoBarSeverity.Error);
+            if (!operationCts.IsCancellationRequested)
+            {
+                ShowStatus($"{operation} failed", exception.Message, InfoBarSeverity.Error);
+            }
         }
         finally
         {
-            WorkspaceProgressRing.IsActive = false;
-            WorkspaceProgressRing.Visibility = Visibility.Collapsed;
+            if (ReferenceEquals(_operationCts, operationCts))
+            {
+                _operationCts = null;
+                WorkspaceProgressRing.IsActive = false;
+                WorkspaceProgressRing.Visibility = Visibility.Collapsed;
+            }
         }
     }
 
@@ -1484,7 +1836,6 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         }
 
         _operationCts.Cancel();
-        _operationCts.Dispose();
         _operationCts = null;
     }
 
@@ -1513,11 +1864,10 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         }
     }
 
-    private void SetWorkspaceMode(bool isStoryboard, bool isDirector, bool isPlanner, bool isReactive)
+    private void SetWorkspaceMode(bool isStoryboard, bool isPlanner, bool isReactive)
     {
-        OverviewPanel.Visibility = isStoryboard || isDirector || isPlanner || isReactive ? Visibility.Collapsed : Visibility.Visible;
+        OverviewPanel.Visibility = isStoryboard || isPlanner || isReactive ? Visibility.Collapsed : Visibility.Visible;
         StoryboardPanel.Visibility = isStoryboard ? Visibility.Visible : Visibility.Collapsed;
-        DirectorPanel.Visibility = isDirector ? Visibility.Visible : Visibility.Collapsed;
         PlannerPanel.Visibility = isPlanner ? Visibility.Visible : Visibility.Collapsed;
         ReactivePanel.Visibility = isReactive ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -1535,8 +1885,27 @@ public sealed partial class WorkspacePage : Page, IStudioRefreshable
         _directorDocument = null;
         _directorProjectId = null;
         _directorReviewedJobId = null;
+        _directorDraftJobId = null;
+        _directorDraftJobStatus = null;
         _directorPendingRequest = null;
         _directorReadiness = null;
+        _workflowDocument = null;
+        _workflowSavedDocument = null;
+        _workflowProjectId = null;
+        _workflowDraftId = null;
+        _workflowStatus = "not_prepared";
+        _workflowRevision = 0;
+        WorkflowSceneItems.Clear();
+        WorkflowThemeTextBox.Text = string.Empty;
+        WorkflowStyleTextBox.Text = string.Empty;
+        WorkflowThemeTextBox.IsEnabled = false;
+        WorkflowStyleTextBox.IsEnabled = false;
+        WorkflowStatusText.Text = message;
+        WorkflowSummaryText.Text = string.Empty;
+        PrepareWorkflowButton.IsEnabled = false;
+        SaveWorkflowButton.IsEnabled = false;
+        ApplyWorkflowButton.IsEnabled = false;
+        DiscardWorkflowEditsButton.IsEnabled = false;
         AssetItems.Clear();
         VariantItems.Clear();
         StoryboardItems.Clear();

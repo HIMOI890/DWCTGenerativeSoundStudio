@@ -697,6 +697,21 @@ public sealed class StudioApiClient : IDisposable
     public Task<JsonElement> GetDirectorDocumentAsync(string projectId, CancellationToken cancellationToken = default) =>
         SendJsonAsync<JsonElement>(HttpMethod.Get, $"/v1/projects/{EscapeIdentifier(projectId)}/director/document", null, true, cancellationToken);
 
+    public Task<JsonElement> GetDirectorWorkflowAsync(string projectId, CancellationToken cancellationToken = default) =>
+        SendJsonAsync<JsonElement>(HttpMethod.Get, $"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow", null, true, cancellationToken);
+
+    public Task<JsonElement> PrepareDirectorWorkflowAsync(string projectId, DirectorApplyRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorApplyRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow/prepare", request, cancellationToken);
+
+    public Task<JsonElement> ReviewDirectorWorkflowAsync(string projectId, DirectorWorkflowReviewRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorWorkflowReviewRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow/review", request, cancellationToken);
+
+    public Task<JsonElement> ReviewReactiveWorkflowAsync(string projectId, DirectorReactiveReviewRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorReactiveReviewRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow/reactive/review", request, cancellationToken);
+
+    public Task<JsonElement> ApplyDirectorWorkflowAsync(string projectId, DirectorWorkflowReviewRequest request, CancellationToken cancellationToken = default) =>
+        PostJsonAsync<DirectorWorkflowReviewRequest, JsonElement>($"/v1/projects/{EscapeIdentifier(projectId)}/director/workflow/apply", request, cancellationToken);
+
     public Task<JsonElement> GetDirectorReadinessAsync(
         string projectId,
         string mode,

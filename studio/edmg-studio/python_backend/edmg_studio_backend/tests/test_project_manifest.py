@@ -82,7 +82,7 @@ def test_project_store_save_is_atomic_and_versioned(tmp_path: Path) -> None:
     )
 
 
-def test_set_audio_invalidates_analysis_and_plan_but_preserves_authored_state(tmp_path: Path) -> None:
+def test_set_audio_archives_analysis_and_preserves_plan_and_authored_state(tmp_path: Path) -> None:
     store = ProjectStore(tmp_path / "data")
     project = store.create("Replacement Audio")
     project.meta.update(
@@ -103,7 +103,8 @@ def test_set_audio_invalidates_analysis_and_plan_but_preserves_authored_state(tm
     assert saved is not None
     assert saved.meta["audio"] == {"filename": "replacement.wav", "size_bytes": 2048}
     assert "analysis" not in saved.meta
-    assert "last_plan" not in saved.meta
+    assert saved.meta["last_plan"] == project.meta["last_plan"]
+    assert saved.meta["analysis_history"][-1] == project.meta["analysis"]
     assert saved.meta["timeline"] == {"layers": [{"id": "authored"}]}
     assert saved.meta["visual_dna"] == {"palette": ["teal"]}
     assert saved.meta["internal_render_history"] == [{"id": "render-1"}]

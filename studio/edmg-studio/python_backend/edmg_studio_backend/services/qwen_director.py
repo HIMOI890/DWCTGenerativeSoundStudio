@@ -7,13 +7,33 @@ hardware qualification and process cancellation; never call inference on a UI th
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from ..domain.director_scene import DirectorDocument
+from ..errors import UserFacingError
+from .model_load_coordinator import ModelLoadCanceled
+
+CancelCheck = Callable[[], bool]
+ProgressCallback = Callable[[str, str], None]
 
 
-def run_director_job(payload: dict, models) -> dict:
+def _check_canceled(cancel_check: CancelCheck | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise ModelLoadCanceled("Director generation canceled")
+
+
+def run_director_job(
+    payload: dict,
+    models,
+    *,
+    cancel_check: CancelCheck | None = None,
+    progress_fn: ProgressCallback | None = None,
+) -> dict:
     """Worker entry point. Recheck installed weights and live memory before loading."""
+    _check_canceled(cancel_check)
+    if progress_fn:
+        progress_fn("validating_model", "Checking the installed Director model and available memory")
     model_id = payload.get("model_id")
     if model_id != "hf_qwen3_vl_8b_director":
         raise ValueError("Unsupported Director model")
@@ -33,6 +53,7 @@ def run_director_job(payload: dict, models) -> dict:
         if not shard.is_file() or shard.stat().st_size == 0:
             raise ValueError(f"Director weight shard is missing: {name}")
         weight_bytes += shard.stat().st_size
+    _check_canceled(cancel_check)
     import psutil
     import torch
 
@@ -48,14 +69,19 @@ def run_director_job(payload: dict, models) -> dict:
     # This conservative admission test does not certify a hardware profile.
     # It avoids depending on swap/commit space to fit model weights.
     if cpu_budget < 2 * gib or sum(budgets.values()) < weight_bytes + 2 * gib:
-        raise ValueError(
-            "Insufficient free memory for installed Director weights; close other model workloads or use a qualified smaller profile"
+        raise UserFacingError(
+            "Insufficient free memory for the installed Director weights",
+            hint="Close other model workloads or use a qualified smaller Director profile, then retry.",
+            code="DIRECTOR_MEMORY_REJECTED",
+            status_code=422,
         )
     result = generate_proposal(
         directory,
         DirectorDocument.model_validate(payload["document"]),
         payload["instruction"],
         max_memory=budgets,
+        cancel_check=cancel_check,
+        progress_fn=progress_fn,
     )
     result["source_revision"] = payload["source_revision"]
     result["provenance"]["model_id"] = model_id
@@ -135,6 +161,8 @@ def generate_proposal(
     *,
     max_memory: dict,
     max_new_tokens: int = 4096,
+    cancel_check: CancelCheck | None = None,
+    progress_fn: ProgressCallback | None = None,
 ) -> dict:
     """Execute local inference; return a validated draft without editing the project."""
     if not 256 <= max_new_tokens <= 16384:
@@ -142,6 +170,7 @@ def generate_proposal(
     if not max_memory:
         raise ValueError("Qualified memory limits are required before loading the Director")
     model_directory = model_directory.resolve(strict=True)
+    _check_canceled(cancel_check)
     config = json.loads((model_directory / "config.json").read_text(encoding="utf-8"))
     if config.get("model_type") != "qwen3_vl":
         raise ValueError("This adapter requires the dense Qwen3-VL model")
@@ -149,8 +178,16 @@ def generate_proposal(
     # Optional dependencies are imported only inside the model worker.
     import torch
     import transformers
-    from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+    from transformers import (
+        AutoProcessor,
+        Qwen3VLForConditionalGeneration,
+        StoppingCriteria,
+        StoppingCriteriaList,
+    )
 
+    _check_canceled(cancel_check)
+    if progress_fn:
+        progress_fn("loading_model", "Loading the Director model")
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         str(model_directory),
         local_files_only=True,
@@ -160,11 +197,13 @@ def generate_proposal(
         torch_dtype="auto",
         attn_implementation="sdpa",
     )
+    _check_canceled(cancel_check)
     processor = AutoProcessor.from_pretrained(
         str(model_directory),
         local_files_only=True,
         trust_remote_code=False,
     )
+    _check_canceled(cancel_check)
     inputs = processor.apply_chat_template(
         messages,
         tokenize=True,
@@ -173,15 +212,32 @@ def generate_proposal(
         return_tensors="pt",
     ).to(model.device)
     inputs.pop("token_type_ids", None)
+    _check_canceled(cancel_check)
+    if progress_fn:
+        progress_fn("generating", "Generating a Director draft for review")
+
+    class CancelRequested(StoppingCriteria):
+        def __call__(self, _input_ids, _scores, **_kwargs):
+            return bool(cancel_check and cancel_check())
+
+    generation_kwargs = {}
+    if cancel_check is not None:
+        generation_kwargs["stopping_criteria"] = StoppingCriteriaList([CancelRequested()])
     with torch.inference_mode():
-        generated = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        generated = model.generate(
+            **inputs, max_new_tokens=max_new_tokens, do_sample=False, **generation_kwargs
+        )
+    _check_canceled(cancel_check)
     trimmed = [
         output[len(source) :] for source, output in zip(inputs.input_ids, generated, strict=True)
     ]
     text = processor.batch_decode(
         trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
     )[0]
+    if progress_fn:
+        progress_fn("validating_draft", "Checking the draft against approved scene constraints")
     proposal = validate_proposal(text, document)
+    _check_canceled(cancel_check)
     return {
         "status": "draft",
         "document": proposal.model_dump(mode="json"),

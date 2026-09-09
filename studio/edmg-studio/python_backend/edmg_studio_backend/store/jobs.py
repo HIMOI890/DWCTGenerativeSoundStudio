@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,7 @@ class JobStore:
                 attempt=excluded.attempt,
                 idempotency_key=excluded.idempotency_key
             WHERE jobs.status IN ('queued', 'paused', 'running')
+              AND jobs.attempt = excluded.attempt
             """,
             (
                 job.id,
@@ -291,6 +293,11 @@ class JobStore:
             job.updated_at = self._now()
             self._upsert_job(job)
             persisted = self.get(job.project_id, job.id)
+            if persisted is not None and persisted.attempt != job.attempt:
+                # Do not turn an obsolete worker's mutable handle into the new
+                # attempt: a later save from that worker must stay fenced out.
+                self._conn.commit()
+                return
             if persisted is not None:
                 job.__dict__.update(persisted.__dict__)
             self._record_event(
@@ -303,13 +310,16 @@ class JobStore:
             self._mirror_json(job)
 
     @contextmanager
-    def publication_guard(self, project_id: str, job_id: str):
+    def publication_guard(self, project_id: str, job_id: str, *, attempt: int | None = None):
         """Serialize publication with cancellation across worker processes."""
         with self._lock:
             self._conn.execute("BEGIN IMMEDIATE")
             try:
                 current = self.get(project_id, job_id)
-                yield bool(current and current.status in ("queued", "running"))
+                yield bool(
+                    current and current.status in ("queued", "running")
+                    and (attempt is None or current.attempt == attempt)
+                )
                 self._conn.commit()
             except BaseException:
                 self._conn.rollback()
@@ -346,9 +356,10 @@ class JobStore:
         total: int,
         message: str | None = None,
         extra: dict[str, Any] | None = None,
+        expected_attempt: int | None = None,
     ) -> Job | None:
         job = self.get(project_id, job_id)
-        if not job:
+        if not job or (expected_attempt is not None and job.attempt != expected_attempt):
             return None
         total_i = max(1, int(total))
         current_i = max(0, min(int(current), total_i))
@@ -609,6 +620,49 @@ class JobStore:
             except Exception:
                 self._conn.rollback()
                 raise
+
+    def renew_lease(self, job: Job, *, lease_seconds: float = 300.0) -> bool:
+        """Renew only the still-running attempt, without replacing job progress."""
+        duration = float(lease_seconds)
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError("Job lease duration must be finite and positive")
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                UPDATE jobs SET lease_expires_at = ?
+                WHERE project_id = ? AND id = ? AND attempt = ?
+                  AND status = 'running' AND lease_owner IS NOT NULL
+                """,
+                (time.time() + duration, job.project_id, job.id, job.attempt),
+            )
+            self._conn.commit()
+            return cursor.rowcount == 1
+
+    @contextmanager
+    def maintain_lease(self, job: Job, *, lease_seconds: float = 300.0):
+        """Keep a claimed attempt leased while it waits, renders or shuts down."""
+        stopped = threading.Event()
+        if not self.renew_lease(job, lease_seconds=lease_seconds):
+            yield
+            return
+        # Capture identity rather than a mutable Job that publication may reload.
+        leased = Job(**job.__dict__)
+
+        def heartbeat() -> None:
+            while not stopped.wait(min(30.0, float(lease_seconds) / 3)):
+                try:
+                    if not self.renew_lease(leased, lease_seconds=lease_seconds):
+                        return
+                except Exception:
+                    logger.exception("Could not renew job lease: %s/%s", leased.project_id, leased.id)
+
+        thread = threading.Thread(target=heartbeat, name=f"edmg-lease-{job.id}", daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            thread.join(timeout=5.0)
 
     def list_events(self, project_id: str, job_id: str) -> list[dict[str, Any]]:
         with self._lock:

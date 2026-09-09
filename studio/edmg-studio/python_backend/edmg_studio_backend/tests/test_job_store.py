@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-from edmg_studio_backend.store.jobs import JobStore, _CORRUPTED_QUARANTINE_SUFFIX
+from edmg_studio_backend.store.jobs import _CORRUPTED_QUARANTINE_SUFFIX, JobStore
 
 
 def test_job_store_create_claim_and_idempotency(tmp_path: Path) -> None:
@@ -36,9 +36,9 @@ def test_job_store_migrates_json_and_recovers_expired_lease(tmp_path: Path) -> N
     job_dir.mkdir(parents=True)
     legacy_id = "legacyjob00000000000000000001"
     (job_dir / f"{legacy_id}.json").write_text(
-        '{"id":"%s","project_id":"proj2","type":"analyze","status":"queued",'
+        f'{{"id":"{legacy_id}","project_id":"proj2","type":"analyze","status":"queued",'
         '"created_at":"2026-07-15 00:00:00","updated_at":"2026-07-15 00:00:00",'
-        '"payload":{"x":1}}' % legacy_id,
+        '"payload":{"x":1}}',
         encoding="utf-8",
     )
     store = JobStore(projects, db_path=tmp_path / "jobs.sqlite")
@@ -174,9 +174,9 @@ def test_job_store_migrate_skips_unreadable_project_dirs(tmp_path: Path) -> None
     good.mkdir(parents=True)
     legacy_id = "legacyjob00000000000000000002"
     (good / f"{legacy_id}.json").write_text(
-        '{"id":"%s","project_id":"goodproj","type":"analyze","status":"queued",'
+        f'{{"id":"{legacy_id}","project_id":"goodproj","type":"analyze","status":"queued",'
         '"created_at":"2026-07-15 00:00:00","updated_at":"2026-07-15 00:00:00",'
-        '"payload":{}}' % legacy_id,
+        '"payload":{}}',
         encoding="utf-8",
     )
     bad = projects / "badproj"
@@ -213,5 +213,57 @@ def test_job_store_migrate_skips_already_quarantined_dirs(tmp_path: Path) -> Non
         # Quarantined trees are skipped entirely (not double-renamed, not migrated).
         assert quarantined.is_dir()
         assert store.list_all() == []
+    finally:
+        store.close()
+
+
+def test_lease_heartbeat_keeps_a_waiting_worker_from_being_reclaimed(tmp_path):
+    store = JobStore(tmp_path / "projects")
+    peer = JobStore(tmp_path / "projects")
+    try:
+        original = store.create("lease-project", "qwen_director", {})
+        claimed = store.claim_next_queued(lease_seconds=0.2)
+        assert claimed.id == original.id
+        with store.maintain_lease(claimed, lease_seconds=0.2):
+            # Wait across multiple lease lifetimes, like a queued GPU worker.
+            time.sleep(0.55)
+            assert peer.claim_next_queued() is None
+            assert peer.get(original.project_id, original.id).attempt == claimed.attempt
+        time.sleep(0.25)
+        assert peer.claim_next_queued().id == original.id
+    finally:
+        peer.close()
+        store.close()
+
+
+def test_old_attempt_cannot_renew_publish_or_overwrite_a_retry(tmp_path):
+    store = JobStore(tmp_path / "projects")
+    try:
+        original = store.create("retry-project", "qwen_director", {})
+        old = store.claim_next_queued()
+        store.cancel(original.project_id, original.id)
+        store.retry(original.project_id, original.id)
+        new = store.claim_next_queued()
+        assert new.attempt > old.attempt
+        assert not store.renew_lease(old)
+        assert store.renew_lease(new)
+        with store.publication_guard(old.project_id, old.id, attempt=old.attempt) as permitted:
+            assert not permitted
+        store.update_progress(new.project_id, new.id, stage="loading_model", current=0, total=1)
+        assert store.update_progress(
+            old.project_id, old.id, stage="draft_ready", current=1, total=1,
+            expected_attempt=old.attempt,
+        ) is None
+        old.status = "succeeded"
+        old.result = {"document": "stale draft"}
+        store.save(old)
+        assert old.attempt < new.attempt
+        old.status = "failed"
+        old.error = "late cleanup failure"
+        store.save(old)
+        saved = store.get(new.project_id, new.id)
+        assert saved.status == "running"
+        assert saved.result is None
+        assert saved.progress["stage"] == "loading_model"
     finally:
         store.close()

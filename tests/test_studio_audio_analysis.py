@@ -86,7 +86,9 @@ def test_analyze_audio_builds_rich_longform_payload(tmp_path, monkeypatch):
 
     saved_proj = store.get(proj.id)
     assert saved_proj is not None
-    assert "last_plan" not in saved_proj.meta
+    assert saved_proj.meta["last_plan"] == proj.meta["last_plan"]
+    assert saved_proj.meta["director_workflow"]["status"] == "draft"
+    assert saved_proj.meta["director_workflow"]["schedule"]["motion_keys"]
     assert saved_proj.meta["timeline"] == {"layers": [{"id": "authored"}]}
     payload = studio_app._build_creative_direction_payload(saved_proj, 0, "cinematic", 1.0)
     assert payload["sections"]

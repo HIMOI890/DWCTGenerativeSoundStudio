@@ -1,8 +1,8 @@
 """Project-owned Director state; preparing prompts never submits generation."""
 
-from fastapi import APIRouter, HTTPException
 from typing import Literal
 
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..domain.director_readiness import (
@@ -13,6 +13,7 @@ from ..domain.director_readiness import (
     resolve_director_readiness,
 )
 from ..domain.director_scene import DirectorDocument, compile_scene
+from ..domain.director_workflow import prepare_workflow
 from ..revisions import RevisionRoute
 from ..services.qwen_director import validate_proposal
 
@@ -201,6 +202,7 @@ def create_director_router(get_store, get_jobs=None, get_models=None, get_hardwa
             "job_id": job.id,
             "status": job.status,
             "error": job.error,
+            "progress": job.progress,
             "result": job.result if job.status == "succeeded" else None,
         }
 
@@ -232,6 +234,8 @@ def create_director_router(get_store, get_jobs=None, get_models=None, get_hardwa
                 "source_revision": job.payload["source_revision"],
                 "provenance": job.result.get("provenance", {}),
             }
+            prepare_workflow(project, lambda _: project.meta.get("last_plan") or {},
+                             resulting_revision=project.revision + 1, source="director")
 
         try:
             return response(
@@ -257,6 +261,9 @@ def create_director_router(get_store, get_jobs=None, get_models=None, get_hardwa
             new_bible = document.story_bible.model_dump(exclude={"revision"})
             document.story_bible.revision = previous.story_bible.revision + (old_bible != new_bible)
             project.meta["director_document"] = document.model_dump(mode="json")
+            if document.scenes:
+                prepare_workflow(project, lambda _: project.meta.get("last_plan") or {},
+                                 resulting_revision=project.revision + 1, source="director")
 
         try:
             return response(

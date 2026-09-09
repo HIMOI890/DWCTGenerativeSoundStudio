@@ -18,6 +18,16 @@ public sealed record DirectorGenerationRequest(
 public sealed record DirectorApplyRequest(
     [property: JsonPropertyName("expected_revision")] long ExpectedRevision);
 
+public sealed record DirectorWorkflowReviewRequest(
+    [property: JsonPropertyName("expected_revision")] long ExpectedRevision,
+    [property: JsonPropertyName("draft_id")] string DraftId,
+    [property: JsonPropertyName("document")] JsonElement? Document = null);
+
+public sealed record DirectorReactiveReviewRequest(
+    [property: JsonPropertyName("expected_revision")] long ExpectedRevision,
+    [property: JsonPropertyName("draft_id")] string DraftId,
+    [property: JsonPropertyName("payload")] JsonElement Payload);
+
 public sealed record EditorCommandRequest(
     [property: JsonPropertyName("operation_id")] string OperationId,
     [property: JsonPropertyName("expected_revision")] long ExpectedRevision,

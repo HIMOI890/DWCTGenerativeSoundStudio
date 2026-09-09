@@ -538,8 +538,12 @@ class ProjectStore:
     def set_audio(self, project_id: str, filename: str, bytes_len: int) -> None:
         def _apply(proj: Project) -> None:
             proj.meta["audio"] = {"filename": filename, "size_bytes": bytes_len}
+            if proj.meta.get("analysis"):
+                proj.meta.setdefault("analysis_history", []).append(deepcopy(proj.meta["analysis"]))
+                proj.meta["analysis_history"] = proj.meta["analysis_history"][-10:]
             proj.meta.pop("analysis", None)
-            proj.meta.pop("last_plan", None)
+            # Source changes invalidate workflow fingerprints. Keep the user's
+            # scenes and approved edits for review after the new analysis.
 
         try:
             self.mutate(project_id, _apply)

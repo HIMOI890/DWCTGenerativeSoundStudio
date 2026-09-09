@@ -2,6 +2,21 @@
 
 Status: partial implementation; no master-blueprint milestone is complete.
 
+## Workspace integration checkpoint — 2026-09-08
+
+The user approved one connected Overview + Director, AI Planner, and Reactive Lab workflow, with automatically prepared downstream keyframes and one shared review/apply boundary. WinUI is the first implementation. This checkpoint is committed and pushed before launching the new UI, as explicitly requested; interactive acceptance is still pending at this checkpoint.
+
+- Audio analysis prepares a persistent Workspace direction draft using the existing local planner and schedule compiler. It does not submit inference or provider jobs. Upload/reanalysis retains scene plans and authored timeline content; replaced analysis is archived and source fingerprints prevent stale draft application.
+- Planner generation, scene edits, Planner imports, saved Director documents, and accepted Qwen proposals refresh the shared draft. Director, Planner, and Reactive views receive one scene/schedule projection with linked analysis/plan revisions, rational frame-rate metadata, sample strings, camera keys, motion keys, and cues.
+- WinUI combines Overview and Director. Native scene fields edit the complete underlying document while retaining extension fields. Advanced saved-direction and Qwen controls remain available. Reactive Lab opens on automatically populated keyframes with native strength/zoom refinement, local recovery of unsaved refinements, and shared save/apply. Planner can open the generated Workspace plan immediately after analysis.
+- Reactive refinements retain source IDs and timing, validate finite bounded values, reject locked-scene changes, preserve unknown extension fields, and survive reanalysis for matching point IDs. Unmatched refinements remain recorded with a placement-review warning. Applying the shared draft preserves user/locked timeline content through the existing ownership rules and records the timeline change in editor undo history.
+- Queued local model workers now serialize their process lifetimes through one cross-process model-load gate. Lease renewal, cancellation while waiting/running, attempt fencing, process reaping, and prevention of duplicate inline fallback are covered. Qwen inference has cooperative stopping and live memory budgets. This gate covers dispatcher jobs, not unrelated GPU consumers or direct preview calls.
+- A prior native validation of the worker slice observed cancellation of a validation-only Qwen queue item without project mutation. This was not model inference. The new merged Workspace controls have not yet been launched at this checkpoint.
+
+Verification before push: WinUI Release x64 build passes with zero warnings/errors; native Core **283 passed** (existing MSTest analyzer warnings); repository **149 passed, 4 opt-in live-model skips**; backend **662 passed, 3 Windows analyzer skips**; frontend **173 tests in 41 files**, lint and typecheck pass. New Workspace domain/API files and integration tests pass targeted Ruff checks. Broad legacy backend Ruff findings remain outside this targeted lint claim. Endpoint integration tests substitute expensive audio feature extraction/transcription, so actual analyzed audio and native interaction still require live validation.
+
+New Electron presentation, actual Qwen/Hunyuan temporal artifacts, model/hardware qualification, synchronized native audio, and the remaining master-blueprint milestones are still open. Existing Electron compatibility checks pass. This checkpoint does not claim completed editor or internal-engine milestones.
+
 ## Scope and provenance
 
 - Working branch: `codex/master-blueprint-winui-first`.

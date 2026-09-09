@@ -140,6 +140,38 @@ def test_director_queue_is_idempotent_and_never_applies_draft(tmp_path):
         assert client.post(path, json={**body, "operation_id": "direction-2"}).status_code == 422
 
 
+def test_workspace_draft_reports_waiting_progress_and_hides_canceled_output(tmp_path):
+    store = ProjectStore(tmp_path / "projects")
+    project = store.create("Director progress")
+    jobs = JobStore(store.projects_dir)
+    try:
+        job = jobs.create(project.id, "qwen_director", {})
+        unrelated = jobs.create(project.id, "assemble_variant", {})
+        jobs.update_progress(
+            project.id, job.id, stage="waiting_for_model", current=0, total=1,
+            message="Waiting for the current local model job to finish",
+        )
+        app = FastAPI()
+        app.include_router(create_director_router(lambda: store, lambda: jobs))
+        with TestClient(app) as client:
+            path = f"/v1/projects/{project.id}/director/drafts/{job.id}"
+            waiting = client.get(path).json()
+            assert waiting["progress"]["stage"] == "waiting_for_model"
+            assert "Waiting" in waiting["progress"]["message"]
+            assert waiting["result"] is None
+            assert client.get(path.replace(job.id, unrelated.id)).status_code == 404
+            jobs.cancel(project.id, job.id)
+            job.status = "succeeded"
+            job.result = {"document": "late output"}
+            jobs.save(job)
+            canceled = client.get(path).json()
+            assert canceled["status"] == "canceled"
+            assert canceled["result"] is None
+            assert store.get(project.id).revision == project.revision
+    finally:
+        jobs.close()
+
+
 def test_director_generation_persists_resolved_workspace_policy(tmp_path):
     store = ProjectStore(tmp_path / "projects")
     project = store.create("Resolved Director")

@@ -26,6 +26,10 @@ public sealed partial class AiPlannerLabPage : Page
     private bool _suppressSceneEditorChanges;
     private bool _suppressSceneSelection;
     private bool _pageLoaded;
+    private string? _workflowDraftId;
+    private string _workflowStatus = "not_prepared";
+    private int _workflowVariantIndex;
+    private long _workflowRevision;
 
     private PlanVariantDto? SelectedVariant =>
         _plan is not null &&
@@ -51,7 +55,7 @@ public sealed partial class AiPlannerLabPage : Page
     private async void AiPlannerLabPage_Loaded(object sender, RoutedEventArgs e)
     {
         _pageLoaded = true;
-        await LoadAsync();
+        if (!_isVariantDirty) await LoadAsync();
     }
 
     private void AiPlannerLabPage_Unloaded(object sender, RoutedEventArgs e)
@@ -92,6 +96,7 @@ public sealed partial class AiPlannerLabPage : Page
     private async Task LoadProjectAsync(string projectId, CancellationToken cancellationToken)
     {
         var response = await App.Services.ApiClient.GetProjectAsync(projectId, cancellationToken);
+        var workflow = await App.Services.ApiClient.GetDirectorWorkflowAsync(projectId, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         _project = response.Project;
         _session.ActiveProjectId = response.Project.Id;
@@ -100,7 +105,13 @@ public sealed partial class AiPlannerLabPage : Page
             VisualDnaTextBox.Text = FormatJson(response.VisualDna);
         }
 
-        if (response.Project.HasPlan &&
+        ReadWorkflow(workflow);
+        if (workflow.TryGetProperty("plan", out var sharedPlan) && sharedPlan.ValueKind == JsonValueKind.Object)
+        {
+            _plan = JsonSerializer.Deserialize(sharedPlan.GetRawText(), StudioJson.GetTypeInfo<PlanDto>());
+            PresentPlan();
+        }
+        else if (response.Project.HasPlan &&
             response.Project.Meta.TryGetProperty("last_plan", out var planJson) &&
             planJson.ValueKind == JsonValueKind.Object)
         {
@@ -110,6 +121,18 @@ public sealed partial class AiPlannerLabPage : Page
         else
         {
             ClearPlan();
+        }
+    }
+
+    private void ReadWorkflow(JsonElement workflow)
+    {
+        _workflowRevision = workflow.GetProperty("revision").GetInt64();
+        _workflowStatus = workflow.GetProperty("status").GetString() ?? "not_prepared";
+        _workflowDraftId = null;
+        if (workflow.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.Object)
+        {
+            _workflowDraftId = draft.GetProperty("draft_id").GetString();
+            _workflowVariantIndex = draft.TryGetProperty("variant_index", out var index) ? index.GetInt32() : 0;
         }
     }
 
@@ -191,8 +214,7 @@ public sealed partial class AiPlannerLabPage : Page
             {
                 _plan = await App.Services.ApiClient.AnalyzeAndBuildPlanAsync(project.Id, request, mode, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
-                PresentPlan();
-                await RefreshProjectRevisionAsync(project.Id, cancellationToken);
+                await LoadProjectAsync(project.Id, cancellationToken);
             },
             successMessage: $"Generated {_plan?.Variants.Count ?? 0} plan variants.");
     }
@@ -293,6 +315,8 @@ public sealed partial class AiPlannerLabPage : Page
             return;
         }
         ScheduleSummaryText.Text = string.Join(" · ", draft.Summary.Select(item => $"{item.Value} {item.Key.Replace('_', ' ')}"));
+        if (_workflowDraftId is not null && _selectedVariantIndex == _workflowVariantIndex)
+            ScheduleSummaryText.Text = $"Shared Workspace draft ({_workflowStatus}) · Reactive Lab is filled automatically. " + ScheduleSummaryText.Text;
         ScheduleWarningsText.Text = string.Join(Environment.NewLine, draft.Warnings);
         var lines = new List<string>();
         foreach (string group in new[] { "prompt_anchors", "image_anchors", "camera_keys", "motion_keys", "markers" })
@@ -328,7 +352,7 @@ public sealed partial class AiPlannerLabPage : Page
             // Saving scene edits may replace the variant instance.
             if (SelectedVariant is { } current) current.ScheduleDraft = response.Draft;
             PresentSchedule();
-            await RefreshProjectRevisionAsync(project.Id, cancellationToken);
+            await LoadProjectAsync(project.Id, cancellationToken);
         }, "Draft regenerated. Review it before approval; Timeline is unchanged.");
     }
 
@@ -362,9 +386,20 @@ public sealed partial class AiPlannerLabPage : Page
             "Applying approved schedule to Timeline",
             async cancellationToken =>
             {
-                var response = await App.Services.ApiClient.ApplyPlannerScheduleAsync(project.Id,
-                    new PlannerScheduleRequest { VariantIndex = _selectedVariantIndex, ExpectedRevision = _project?.Revision, ScheduleRevision = draft.ScheduleRevision }, cancellationToken);
-                if (!response.Ok) throw new InvalidDataException("The backend did not apply the approved schedule.");
+                if (_workflowDraftId is not null && _selectedVariantIndex == _workflowVariantIndex)
+                {
+                    if (_workflowStatus != "draft") throw new InvalidOperationException("Review the current Workspace draft before applying.");
+                    var applied = await App.Services.ApiClient.ApplyDirectorWorkflowAsync(project.Id,
+                        new DirectorWorkflowReviewRequest(_workflowRevision, _workflowDraftId), cancellationToken);
+                    ReadWorkflow(applied);
+                    PresentSchedule();
+                }
+                else
+                {
+                    var response = await App.Services.ApiClient.ApplyPlannerScheduleAsync(project.Id,
+                        new PlannerScheduleRequest { VariantIndex = _selectedVariantIndex, ExpectedRevision = _project?.Revision, ScheduleRevision = draft.ScheduleRevision }, cancellationToken);
+                    if (!response.Ok) throw new InvalidDataException("The backend did not apply the approved schedule.");
+                }
             },
             successMessage: "The selected variant is now applied to Timeline.",
             afterSuccess: cancellationToken => RefreshProjectRevisionAsync(project.Id, cancellationToken));
@@ -938,6 +973,8 @@ public sealed partial class AiPlannerLabPage : Page
                 _selectedSceneIndex = sceneIndex;
                 _session.SelectedVariantIndex = _selectedVariantIndex;
                 PresentPlan();
+                ReadWorkflow(await App.Services.ApiClient.GetDirectorWorkflowAsync(project.Id, cancellationToken));
+                PresentSchedule();
                 await RefreshProjectRevisionAsync(project.Id, cancellationToken);
                 saved = true;
             },

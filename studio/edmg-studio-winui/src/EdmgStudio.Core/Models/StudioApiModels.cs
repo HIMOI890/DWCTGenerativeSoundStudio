@@ -751,6 +751,8 @@ public static class StudioJson
 [JsonSerializable(typeof(DirectorUpdateRequest))]
 [JsonSerializable(typeof(DirectorGenerationRequest))]
 [JsonSerializable(typeof(DirectorApplyRequest))]
+[JsonSerializable(typeof(DirectorWorkflowReviewRequest))]
+[JsonSerializable(typeof(DirectorReactiveReviewRequest))]
 [JsonSerializable(typeof(TimelineAutosaveRequest))]
 [JsonSerializable(typeof(TimelineRenderRequest))]
 [JsonSerializable(typeof(TimelineRenderResponse))]

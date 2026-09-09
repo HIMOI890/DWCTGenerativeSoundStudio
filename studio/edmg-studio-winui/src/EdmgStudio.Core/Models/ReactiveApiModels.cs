@@ -162,6 +162,15 @@ public sealed class ReactiveLabLocalState
 
     [JsonPropertyName("presets")]
     public List<ReactivePreset> Presets { get; init; } = [];
+
+    [JsonPropertyName("workspace_draft_id")]
+    public string? WorkspaceDraftId { get; init; }
+
+    [JsonPropertyName("workspace_draft_revision")]
+    public long? WorkspaceDraftRevision { get; init; }
+
+    [JsonPropertyName("workspace_draft")]
+    public JsonElement? WorkspaceDraft { get; init; }
 }
 
 public sealed class ReactiveLabMetadata

@@ -363,6 +363,9 @@ app.include_router(create_schedule_router(lambda: store))
 from .api.editor import create_editor_router
 app.include_router(create_editor_router(lambda: store))
 from .api.director import create_director_router
+from .api.director_workflow import create_workflow_router
+
+app.include_router(create_workflow_router(lambda: store, lambda project: _workspace_audio_plan(project)))
 app.include_router(
     create_director_router(
         lambda: store,
@@ -4335,13 +4338,23 @@ def analyze_audio(project_id: str):
     duration_s = _analysis_duration_s(analysis)
     if duration_s:
         analysis["duration_s"] = float(duration_s)
+    previous_analysis = proj.meta.get("analysis") or next(iter(reversed(proj.meta.get("analysis_history") or [])), {})
+    analysis["revision"] = int(previous_analysis.get("revision") or 0) + 1
     analysis_path = _write_project_analysis_snapshot(project_id, analysis)
     if analysis_path:
         analysis["analysis_path"] = analysis_path
     proj.meta["analysis"] = analysis
-    proj.meta.pop("last_plan", None)
+    # Analysis prepares reviewable direction; approved plans and the timeline
+    # remain active until the user applies the combined Workspace draft.
+    try:
+        from .domain.director_workflow import prepare_workflow
+        prepare_workflow(proj, _workspace_audio_plan, resulting_revision=proj.revision + 1)
+        proj.meta.pop("director_workflow_error", None)
+    except Exception:
+        logger.exception("Could not prepare Workspace direction after audio analysis")
+        proj.meta["director_workflow_error"] = "Audio analysis is saved. Prepare direction again to retry the scene draft."
     store.save(proj)
-    return {"ok": True, "analysis": analysis}
+    return {"ok": True, "analysis": analysis, "direction_prepared": not proj.meta.get("director_workflow_error")}
 
 
 @app.get("/v1/director_modes")
@@ -6073,6 +6086,14 @@ def _local_plan_from_project(proj: Any, *, title: str, style_prefs: str, num_var
     return {"title": title, "duration_s": float(getattr(analysis_obj, "duration", 0.0) or 0.0) or 60.0, "variants": variants, "source": "local"}
 
 
+def _workspace_audio_plan(project) -> dict:
+    """Reuse the installed local planner for automatic, non-chargeable drafts."""
+    plan = _local_plan_from_project(
+        project, title=project.name, style_prefs="", num_variants=1, max_scenes=12,
+    )
+    return _enrich_normalized_plan(plan, project.meta.get("analysis") or {})
+
+
 def _scene_energy_from_analysis(index: int, total: int, analysis: dict[str, Any]) -> float:
     overall = _infer_reactivity_metrics(analysis if isinstance(analysis, dict) else {})
     curve = list(overall.get("energy_curve") or [])
@@ -6831,7 +6852,11 @@ def _build_project_snapshot(proj: Any, *, dna: Any | None = None) -> ProjectSnap
 def _apply_plan_to_project_timeline(proj: Any, *, variant_index: int, overwrite: bool) -> dict[str, Any]:
     plan = proj.meta.get("last_plan")
     if not isinstance(plan, dict):
-        raise HTTPException(400, "No plan. Generate a plan first.")
+        from .domain.director_workflow import workflow_state
+        current_workflow = workflow_state(proj)
+        plan = current_workflow.get("plan") if current_workflow["status"] == "draft" else None
+        if not isinstance(plan, dict):
+            raise HTTPException(400, "No plan. Analyze audio or generate a plan first.")
     variants = plan.get("variants") if isinstance(plan.get("variants"), list) else []
     vi = int(variant_index or 0)
     if not variants or vi < 0 or vi >= len(variants):
@@ -7051,7 +7076,11 @@ def update_plan_variant(project_id: str, req: StoryboardVariantUpdateRequest):
 
     plan = proj.meta.get("last_plan")
     if not isinstance(plan, dict):
-        raise HTTPException(400, "No plan. Generate a plan first.")
+        from .domain.director_workflow import workflow_state
+        current_workflow = workflow_state(proj)
+        plan = current_workflow.get("plan") if current_workflow["status"] == "draft" else None
+        if not isinstance(plan, dict):
+            raise HTTPException(400, "No plan. Analyze audio or generate a plan first.")
 
     variants = plan.get("variants") if isinstance(plan.get("variants"), list) else []
     variant_index = int(req.variant_index or 0)
@@ -7397,7 +7426,7 @@ def tick_worker():
     job = jobs.claim_next_queued()
     if not job:
         return {"ok": True, "note": "no queued jobs"}
-    _execute_job(job)
+    _dispatch_job(job)
     latest = jobs.get(job.project_id, job.id) or job
     return {"ok": True, "job": latest.__dict__}
 
@@ -7445,7 +7474,7 @@ def _execute_job(job):
         background_context.reset(token)
         revision_context.reset(revision_token)
     try:
-        with jobs.publication_guard(job.project_id, job.id) as active:
+        with jobs.publication_guard(job.project_id, job.id, attempt=job.attempt) as active:
             if active and job.status == "succeeded":
                 def publish(current):
                     for project_id, baseline, edited in state["pending"]:
@@ -7458,9 +7487,7 @@ def _execute_job(job):
                 for artifact_path, artifact_payload in state.get("artifacts", []):
                     publish_artifact(artifact_path, artifact_payload)
             elif not active:
-                latest = jobs.get(job.project_id, job.id)
-                if latest:
-                    job.__dict__.update(latest.__dict__)
+                return
             jobs.save(job)
     except Exception as exc:
         job.status = "failed"
@@ -7474,7 +7501,21 @@ def _execute_job_body(job):
     try:
         if job.type == "qwen_director":
             from .services.qwen_director import run_director_job
-            job.result = run_director_job(job.payload, models)
+            job.result = run_director_job(
+                job.payload,
+                models,
+                cancel_check=lambda: not _job_attempt_active(job),
+                progress_fn=lambda stage, message: jobs.update_progress(
+                    job.project_id, job.id, stage=stage, current=0, total=1, message=message,
+                    expected_attempt=job.attempt,
+                ),
+            )
+            if _job_attempt_active(job):
+                jobs.update_progress(
+                    job.project_id, job.id, stage="draft_ready", current=1, total=1,
+                    message="Director draft ready for review",
+                    expected_attempt=job.attempt,
+                )
             job.status = "succeeded"
         elif job.type == "comfyui_scene":
             res = _run_comfyui_scene(job.project_id, job.id, job.payload)
@@ -7594,7 +7635,7 @@ def _job_in_subprocess_enabled() -> bool:
     return True
 
 
-def _render_worker_command(project_id: str, job_id: str) -> list[str]:
+def _render_worker_command(project_id: str, job_id: str, *, attempt: int | None = None) -> list[str]:
     """Build the CLI command for an isolated render worker.
 
     Source launches need Python's module selector. A PyInstaller-frozen backend
@@ -7605,92 +7646,185 @@ def _render_worker_command(project_id: str, job_id: str) -> list[str]:
     if not getattr(sys, "frozen", False):
         cmd.extend(["-m", "edmg_studio_backend"])
     cmd.extend(["run-job", "--project", project_id, "--job", job_id])
+    if attempt is not None:
+        cmd.extend(["--attempt", str(attempt)])
     return cmd
+
+
+class _WorkerProcessStartedError(RuntimeError):
+    """Execution already started; retrying in the API could duplicate work."""
+
+
+def _stop_render_process(proc) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+    except OSError:
+        logger.exception("Could not terminate the render process; waiting before forced shutdown")
+    try:
+        proc.wait(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except OSError:
+            logger.exception("Could not kill the render process; retaining admission until it exits")
+        # Keep the model admission slot until the process has actually exited.
+        proc.wait()
 
 
 def _run_job_in_subprocess(job) -> None:
     """Execute a claimed job in a separate Python process.
 
-    The job/project stores are entirely file-based, so the child writes
-    progress, logs and results to the same files this process polls. This keeps
+    The child writes progress, logs and results to the shared SQLite job store. This keeps
     CPU/GIL-bound rendering out of the API process so the UI stays responsive
-    and cancellation (a file-based status flag) still works.
+    and cancellation still works.
     """
-    released_pipelines = release_cached_internal_pipelines()
-    if released_pipelines:
-        message = (
-            f"Released {released_pipelines} cached CUDA preview pipeline bundle(s) "
-            "before starting the isolated render process"
-        )
-        logger.info(message)
-        jobs.append_log(job.project_id, job.id, message)
-
-    cmd = _render_worker_command(job.project_id, job.id)
+    if not _job_attempt_active(job):
+        return
+    cmd = _render_worker_command(job.project_id, job.id, attempt=job.attempt)
     jobs.append_log(job.project_id, job.id, "Dispatching to isolated render process")
     popen_kwargs: dict[str, Any] = {"env": os.environ.copy()}
     if os.name == "nt":
         # Keep the foreground API/UI snappy while the render grinds.
-        popen_kwargs["creationflags"] = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+        popen_kwargs["creationflags"] = (
+            getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        )
     proc = subprocess.Popen(cmd, **popen_kwargs)
 
     cancel_deadline: float | None = None
-    while True:
+    try:
+        while True:
+            try:
+                proc.wait(timeout=1.0)
+                break
+            except subprocess.TimeoutExpired:
+                latest = jobs.get(job.project_id, job.id)
+                obsolete = latest is None or latest.attempt != job.attempt
+                if obsolete or latest.status == "canceled":
+                    if obsolete:
+                        _stop_render_process(proc)
+                        break
+                    if cancel_deadline is None:
+                        cancel_deadline = time.monotonic() + max(1.0, settings.render_subprocess_cancel_grace_s)
+                    elif time.monotonic() >= cancel_deadline:
+                        jobs.append_log(
+                            job.project_id, job.id,
+                            "Cancel grace period elapsed; terminating render process",
+                        )
+                        _stop_render_process(proc)
+                        break
+        rc = proc.returncode
+        latest = jobs.get(job.project_id, job.id)
+        if latest is None or latest.attempt != job.attempt:
+            return
+        if latest.status in ("succeeded", "failed", "canceled"):
+            return
+        # Child exited without finalizing the job (crash / OOM / killed).
+        latest.status = "failed"
+        latest.error = f"Render worker process exited unexpectedly (exit code {rc})."
+        _terminalize_failed_runtime_checkpoint(job.project_id, latest, message=latest.error)
+        latest = jobs.get(job.project_id, job.id)
+        if latest is None or latest.attempt != job.attempt or latest.status in ("succeeded", "failed", "canceled"):
+            return
+        latest.status = "failed"
+        latest.error = f"Render worker process exited unexpectedly (exit code {rc})."
+        jobs.save(latest)
+        jobs.append_log(job.project_id, job.id, latest.error)
+    except BaseException as exc:
         try:
-            proc.wait(timeout=1.0)
-            break
-        except subprocess.TimeoutExpired:
-            latest = jobs.get(job.project_id, job.id)
-            if latest and latest.status == "canceled":
-                if cancel_deadline is None:
-                    cancel_deadline = time.time() + max(1.0, settings.render_subprocess_cancel_grace_s)
-                elif time.time() >= cancel_deadline:
-                    jobs.append_log(
-                        job.project_id,
-                        job.id,
-                        "Cancel grace period elapsed; terminating render process",
-                    )
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5.0)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                    break
+            _stop_render_process(proc)
+        finally:
+            # Every failure after Popen, including finalization or cleanup, is
+            # ineligible for the legacy launch-failure fallback.
+            if not isinstance(exc, Exception):
+                raise
+            raise _WorkerProcessStartedError("Could not monitor or finalize the isolated worker") from exc
 
-    rc = proc.returncode
+
+_LOCAL_MODEL_JOB_TYPES = frozenset({
+    "qwen_director", "internal_still_scene", "internal_video", "performer_video",
+    "tensorrt_standalone", "tensorrt_deforum", "comfyui_scene", "comfyui_motion_scene",
+})
+
+
+def _job_attempt_active(job) -> bool:
     latest = jobs.get(job.project_id, job.id)
-    if latest is None:
-        return
-    if latest.status in ("succeeded", "failed", "canceled"):
-        return
-    # Child exited without finalizing the job (crash / OOM / killed).
-    latest.status = "failed"
-    latest.error = f"Render worker process exited unexpectedly (exit code {rc})."
-    _terminalize_failed_runtime_checkpoint(
-        job.project_id,
-        latest,
-        message=latest.error,
+    return bool(
+        latest and latest.attempt == job.attempt and latest.status in ("queued", "running")
     )
-    latest = jobs.get(job.project_id, job.id) or latest
-    latest.status = "failed"
-    latest.error = f"Render worker process exited unexpectedly (exit code {rc})."
-    jobs.save(latest)
-    jobs.append_log(job.project_id, job.id, latest.error)
 
 
 def _dispatch_job(job) -> None:
+    """Serialize local model jobs through their complete child-process lifetime."""
+    from .services.model_load_coordinator import ModelLoadCanceled, model_load_lock
+
+    with jobs.maintain_lease(job):
+        if not _job_attempt_active(job):
+            return
+        if job.type not in _LOCAL_MODEL_JOB_TYPES:
+            _dispatch_admitted_job(job)
+            return
+
+        def waiting() -> None:
+            jobs.update_progress(
+                job.project_id, job.id, stage="waiting_for_model", current=0, total=1,
+                message="Waiting for the current local model job to finish. You can cancel this job.",
+                expected_attempt=job.attempt,
+            )
+
+        try:
+            with model_load_lock(
+                settings.models_dir / ".runtime",
+                cancel_check=lambda: not _job_attempt_active(job), on_wait=waiting,
+            ):
+                if not _job_attempt_active(job):
+                    return
+                release_cached_internal_pipelines()
+                jobs.update_progress(
+                    job.project_id, job.id, stage="starting_worker", current=0, total=1,
+                    message="Starting the local model worker",
+                    expected_attempt=job.attempt,
+                )
+                try:
+                    _dispatch_admitted_job(job)
+                finally:
+                    # In-process legacy/test execution can retain pipelines. Drop
+                    # them before the next admitted model checks live memory.
+                    from .services.internal_video_models import clear_video_pipeline_cache
+                    clear_video_pipeline_cache()
+                    release_cached_internal_pipelines()
+        except ModelLoadCanceled:
+            # Cancellation/retry is already authoritative in the job store.
+            return
+        except Exception as exc:
+            logger.exception("Local model worker admission failed: %s", job.id)
+            job.status = "failed"
+            job.error = _public_render_job_error(exc)
+            jobs.save(job)
+
+
+def _dispatch_admitted_job(job) -> None:
     """Worker entry point: run the job in a child process when enabled."""
     if job.type == "qwen_director":
         # Director inference must never fall back into the API process.
         try:
             _run_job_in_subprocess(job)
-        except Exception as exc:
+        except Exception:
             job.status = "failed"
-            job.error = f"Director worker could not start: {exc}"
+            logger.exception("Director worker failed: %s", job.id)
+            job.error = "Director worker failed. Check the backend log, then retry the draft."
             jobs.save(job)
         return
     if _job_in_subprocess_enabled():
         try:
             _run_job_in_subprocess(job)
+            return
+        except _WorkerProcessStartedError:
+            job.status = "failed"
+            job.error = "The isolated worker stopped after a monitoring error. Review its outputs before retrying."
+            jobs.save(job)
             return
         except Exception as exc:  # pragma: no cover - launch failure fallback
             logger.warning(

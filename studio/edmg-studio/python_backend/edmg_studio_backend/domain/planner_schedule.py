@@ -5,14 +5,17 @@ mutates the active timeline. Ownership, not track type, controls replacement.
 """
 from __future__ import annotations
 
-from copy import deepcopy
 import hashlib
 import json
 import math
 import time
+from copy import deepcopy
 from typing import Any
 
-from ..services.deforum_normalize import operational_render_prompt_from_scene, negative_prompt_from_scene
+from ..services.deforum_normalize import (
+    negative_prompt_from_scene,
+    operational_render_prompt_from_scene,
+)
 
 OWNER = "studio_planner"
 SCHEMA_VERSION = 1
@@ -177,6 +180,13 @@ def attach_schedule_drafts(project, *, resulting_revision: int, variant_indices:
         for scene in variant.get("scenes") or []:
             if isinstance(scene, dict):
                 scene["operational_prompt"] = operational_render_prompt_from_scene(scene)
+    if plan.get("variants"):
+        # All planner entry points publish to the same Workspace draft. Import
+        # locally to keep the pure compiler usable without a domain cycle.
+        from .director_workflow import prepare_workflow
+        index = min(variant_indices) if variant_indices else 0
+        prepare_workflow(project, lambda _: plan, resulting_revision=resulting_revision,
+                         source="planner", variant_index=index)
 
 
 def apply_schedule(timeline: dict, draft: dict) -> dict:
