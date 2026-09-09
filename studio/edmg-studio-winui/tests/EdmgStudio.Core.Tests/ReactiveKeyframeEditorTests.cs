@@ -31,4 +31,13 @@ public sealed class ReactiveKeyframeEditorTests
         Assert.IsFalse(editor.IsEditable);
         Assert.Throws<InvalidOperationException>(() => editor.Refine(0.5, 1.2));
     }
+
+    [TestMethod]
+    public void WorkspaceMetadataWithoutCustomPresetsHasUsableDefaults()
+    {
+        var metadata = JsonSerializer.Deserialize("""{"source":"workspace","fps":30,"selected_variant_index":0}""", StudioJsonContext.Default.ReactiveLabMetadata)!;
+        Assert.IsNotNull(metadata.Settings);
+        Assert.IsNotNull(metadata.Mappings);
+        Assert.IsNotNull(metadata.Settings.Mappings);
+    }
 }
